@@ -2,3 +2,8 @@ operators:
     DHT:
         object_path: fabnet_dht.dht_operator.DHTOperator
         version: '0.1'
+
+    TestMonitor:
+        object_path: test_monitor.TestMonitorOperator
+        version: '0.0.1'
+

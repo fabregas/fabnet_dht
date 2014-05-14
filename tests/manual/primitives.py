@@ -22,17 +22,21 @@ from fabnet.core.fri_base import RamBasedBinaryData
 from fabnet.utils.db_conn import PostgresqlDBConnection as DBConnection
 from fabnet.core.config import Config
 from fabnet_dht.hash_ranges_table import HashRangesTable
+from fabnet.utils.safe_json_file import SafeJsonFile
+from test_monitor import NOTIFICATIONS_DB
 
 from Crypto import Random
 
 monitoring_home = '/tmp/monitor_node_home'
-MONITOR_DB = 'fabnet_monitor_db'
+NDB = os.path.join(monitoring_home, NOTIFICATIONS_DB)
 
-FABNET_NODE_BIN = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../fabnet_core/bin/fabnet-node'))
-FRI_CALLER_BIN = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../fabnet_core/bin/fri-caller'))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+FABNET_NODE_BIN = os.path.join(BASE_DIR, 'fabnet_core/bin/fabnet-node')
+FRI_CALLER_BIN = os.path.join(BASE_DIR, 'fabnet_core/bin/fri-caller')
 ENVIRON = {}
 ENVIRON.update(os.environ)
 ENVIRON['FABNET_PLUGINS_CONF'] = os.path.abspath(os.path.join(os.path.dirname(__file__), '../plugins.yaml'))
+ENVIRON['PYTHONPATH'] = '%s:%s:%s'%(BASE_DIR, os.path.join(BASE_DIR, 'fabnet_core'), os.path.join(BASE_DIR, 'tests/manual'))
 
 def make_fake_hdd(name, size, dev='/dev/loop0'):
     if os.path.exists('/tmp/%s'%name):
@@ -125,12 +129,9 @@ def reboot_nodes(processes, addresses, timeout=None):
 def create_monitor(neigbour):
     os.system('rm -rf %s'%monitoring_home)
     os.system('mkdir %s'%monitoring_home)
-    Config.load(os.path.join(monitoring_home, 'node_config'))
-    Config.update_config({'db_engine': 'postgresql', \
-        'db_conn_str': "dbname=%s user=postgres"%MONITOR_DB}, 'Monitor')
     address = '%s:%s'%('127.0.0.1', 1989)
     logger.warning('{SNP} STARTING MONITORING NODE %s'%address)
-    mon_p = subprocess.Popen(['/usr/bin/python', FABNET_NODE_BIN, address, neigbour, 'monitor', monitoring_home, 'Monitor', '--nodaemon'], env=ENVIRON)
+    mon_p = subprocess.Popen(['/usr/bin/python', FABNET_NODE_BIN, address, neigbour, 'monitor', monitoring_home, 'TestMonitor', '--nodaemon'], env=ENVIRON)
     logger.warning('{SNP} PROCESS STARTED')
     time.sleep(1)
     return mon_p
@@ -251,8 +252,8 @@ def destroy_data(address, nodenum):
 
 
 def call_repair_data(address, out_streem, expect_res, invalid_node=None):
-    dbconn = DBConnection("dbname=%s user=postgres"%MONITOR_DB)
-    dbconn.execute("DELETE FROM notification")
+    if os.path.exists(NDB):
+        os.remove(NDB)
 
     client = FriClient()
     params = {}
@@ -270,7 +271,6 @@ def call_repair_data(address, out_streem, expect_res, invalid_node=None):
 
 
     t0 = datetime.now()
-
     packet_obj = FabnetPacketRequest(method='RepairDataBlocks', is_multicast=True, parameters=params)
     rcode, rmsg = client.call(address, packet_obj)
     if rcode != 0:
@@ -284,17 +284,24 @@ def call_repair_data(address, out_streem, expect_res, invalid_node=None):
             try_cnt = 0
         try_cnt += 1
 	
-        try:
-            cnt = dbconn.select_one("SELECT count(*) FROM notification WHERE notify_topic='RepairDataBlocks'")
-        except Exception, err:
-            print 'DB ERROR: %s'%err
+
+        db = SafeJsonFile(NDB)
+        data = db.read()
+        events = data.get('notifications', [])
+        events = filter(lambda e: e['event_topic']=='RepairDataBlocks', events)
+        cnt = len(events)
+        if cnt == 2:
+            break
         time.sleep(.2)
 
     dt = datetime.now() - t0
 
-    events = dbconn.select("SELECT node_address, notify_type, notify_msg, notify_dt FROM notification WHERE notify_topic='RepairDataBlocks'")
+    db = SafeJsonFile(NDB)
+    data = db.read()
+    events = data.get('notifications', [])
+    events = filter(lambda e: e['event_topic']=='RepairDataBlocks', events)
     for event in events:
-        out_streem.write('[%s][%s][%s] %s\n'%(event[0], event[3], event[1], event[2]))
+        out_streem.write('[%s][%s][%s] %s\n'%(event['event_provider'], event['notify_dt'], event['event_type'], event['event_message']))
 
         #packet_obj = FabnetPacketRequest(method='NodeStatistic', sync=True)
         #client = FriClient()
@@ -311,7 +318,6 @@ def call_repair_data(address, out_streem, expect_res, invalid_node=None):
         out_streem.write('INVALID RESTORED RANGE FREE SIZE. BEFORE=%s, AFTER=%s\n'%(free_size, post_free_size))
 
     out_streem.write('Process time: %s\n'%dt)
-    dbconn.close()
 
 
 def create_virt_net(nodes_count, port_move=0):

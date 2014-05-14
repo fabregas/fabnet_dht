@@ -13,7 +13,7 @@ sys.path.append('.')
 
 import primitives
 from fabnet.utils.db_conn import PostgresqlDBConnection as DBConnection
-from primitives import MONITOR_DB
+from primitives import NDB
 
 
 LOG_DIR = '/tmp/fabnet-test-logs'
@@ -91,30 +91,14 @@ def and_check_range_from_node_with_nums(step, num):
 
 @step(u'And clear monitoring stat')
 def and_clear_monitoring_stat(step):
-    conn = DBConnection("dbname=%s user=postgres"%MONITOR_DB)
-    conn.execute('DELETE FROM notification')
-    conn.execute('DELETE FROM nodes_info')
+    if os.path.exists(NDB):
+        os.remove(NDB)
 
 
 @step(u'And wait (\d+) seconds')
 def and_wait_n_seconds(step, secs):
     secs = int(secs)
     time.sleep(secs)
-
-@step(u'Then see collected stats for all nodes')
-def then_see_collected_stats_for_all_nodes(step):
-    conn = DBConnection("dbname=%s user=postgres"%MONITOR_DB)
-    qeury_nodes = 'SELECT node_address, node_name, status, superiors, uppers, statistic, last_check FROM nodes_info'
-    nodes = conn.select(qeury_nodes)
-    conn.close()
-    nodes_count = len(world.processes)+1
-    if len(nodes) != nodes_count:
-        raise Exception('Expected %i nodes in nodes_info table. But %i occured!'%(nodes_count, len(nodes)))
-    for node in nodes:
-        for field in node:
-            if not field:
-                raise Exception('Invalid node info found: %s'%str(node))
-
 
 
 @step(u'When start virtual network with (\d+) nodes')

@@ -11,10 +11,15 @@ import string
 import hashlib
 
 sys.path.append('fabnet_core')
+sys.path.append('tests/manual')
+
 from fabnet.core import constants
 constants.KEEP_ALIVE_MAX_WAIT_TIME = 5
 constants.CHECK_NEIGHBOURS_TIMEOUT = 1
 constants.FRI_CLIENT_TIMEOUT = 2
+
+from fabnet.utils.safe_json_file import SafeJsonFile
+from test_monitor import NOTIFICATIONS_DB
 
 from fabnet.core.fri_base import FabnetPacketRequest, FabnetPacketResponse
 from fabnet.core.fri_client import FriClient
@@ -22,7 +27,6 @@ from fabnet.core.fri_base import RamBasedBinaryData
 from fabnet.core.constants import RC_OK, NT_SUPERIOR, NT_UPPER, ET_INFO, ET_ALERT, RC_PERMISSION_DENIED
 from fabnet.core.config import Config
 from fabnet.utils.db_conn import PostgresqlDBConnection as DBConnection
-#######from monitor_test import MONITOR_DB
 from fabnet.core.node import Node
 from fabnet.core.operator import OperatorClient
 from fabnet.operations.manage_neighbours import ManageNeighbour
@@ -67,7 +71,7 @@ class TestServerThread(threading.Thread):
     def run(self):
         address = '127.0.0.1:%s'%self.port
         if self.is_monitor:
-            node_type = 'Monitor'
+            node_type = 'TestMonitor'
         else:
             node_type = 'DHT'
 
@@ -501,7 +505,7 @@ class TestDHTInitProcedure(unittest.TestCase):
             self._destroy_fake_hdd('node_1987', '/dev/loop1')
 
 
-    def __test05_repair_data(self):
+    def test05_repair_data(self):
         server = server1 = None
         try:
             home1 = '/tmp/node_1986_home'
@@ -523,8 +527,7 @@ class TestDHTInitProcedure(unittest.TestCase):
             server1 = TestServerThread(1987, home2, neighbour='127.0.0.1:1986', config={'MAX_USED_SIZE_PERCENTS': 99})
             server1.start()
             time.sleep(1)
-            monitor = TestServerThread(1990, monitor_home, is_monitor=True, neighbour='127.0.0.1:1986', \
-                    config={'db_engine': 'postgresql', 'db_conn_str': "dbname=%s user=postgres"%MONITOR_DB})
+            monitor = TestServerThread(1990, monitor_home, is_monitor=True, neighbour='127.0.0.1:1986')
 
             monitor.start()
             time.sleep(1.5)
@@ -538,9 +541,6 @@ class TestDHTInitProcedure(unittest.TestCase):
             data = 'This is replica data!'*10
             data_key2 = server1.put(data)
 
-            conn = DBConnection("dbname=%s user=postgres"%MONITOR_DB)
-            conn.execute('DELETE FROM notification')
-
             time.sleep(.2)
             client = FriClient()
             packet_obj = FabnetPacketRequest(method='RepairDataBlocks', is_multicast=True, parameters={})
@@ -548,27 +548,29 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.assertEqual(rcode, 0, rmsg)
             time.sleep(1.5)
 
-            events = conn.select('SELECT notify_type, node_address, notify_msg FROM notification')
-            conn.execute('DELETE FROM notification')
+            NDB = os.path.join(monitor_home, NOTIFICATIONS_DB)
+            db = SafeJsonFile(NDB)
+            data = db.read()
+            os.remove(NDB)
+            events = data.get('notifications', [])
+            events = filter(lambda e: e['event_topic']=='RepairDataBlocks', events)
 
             stat = 'processed_local_blocks=%i, invalid_local_blocks=0, repaired_foreign_blocks=0, failed_repair_foreign_blocks=0'
             self.assertEqual(len(events), 2)
             event86 = event87 = None
             for event in events:
-                if event[1] == '127.0.0.1:1986':
+                if event['event_provider'] == '127.0.0.1:1986':
                     event86 = event
-                elif event[1] == '127.0.0.1:1987':
+                elif event['event_provider'] == '127.0.0.1:1987':
                     event87 = event
 
-            self.assertEqual(event86[0], ET_INFO)
-            self.assertEqual(event86[1], '127.0.0.1:1986', events)
+            self.assertEqual(event86['event_type'], ET_INFO)
             cnt86 = len(os.listdir(server.get_range_dir())) + len(os.listdir(server.get_replicas_dir()))
-            self.assertTrue(stat%cnt86 in event86[2], event86[2])
+            self.assertTrue(stat%cnt86 in event86['event_message'], event86['event_message'])
 
-            self.assertEqual(event87[0], ET_INFO)
-            self.assertEqual(event87[1], '127.0.0.1:1987')
+            self.assertEqual(event87['event_type'], ET_INFO)
             cnt87 = len(os.listdir(server1.get_range_dir())) + len(os.listdir(server1.get_replicas_dir()))
-            self.assertTrue(stat%cnt87 in event87[2], event87[2])
+            self.assertTrue(stat%cnt87 in event87['event_message'], event87['event_message'])
 
             node86_stat = server.get_stat()
             server.stop()
@@ -582,20 +584,22 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.assertEqual(rcode, 0, rmsg)
             time.sleep(2)
 
-            events = conn.select("SELECT notify_type, node_address, notify_msg FROM notification WHERE notify_topic='RepairDataBlocks'")
-            conn.execute('DELETE FROM notification')
+            db = SafeJsonFile(NDB)
+            data = db.read()
+            os.remove(NDB)
+            events = data.get('notifications', [])
+            events = filter(lambda e: e['event_topic']=='RepairDataBlocks', events)
 
             self.assertEqual(len(events), 1, events)
             event86 = event87 = None
             for event in events:
-                if event[1] == '127.0.0.1:1986':
+                if event['event_provider'] == '127.0.0.1:1986':
                     event86 = event
-                elif event[1] == '127.0.0.1:1987':
+                elif event['event_provider'] == '127.0.0.1:1987':
                     event87 = event
-            self.assertEqual(event87[0], ET_INFO)
-            self.assertEqual(event87[1], '127.0.0.1:1987')
+            self.assertEqual(event87['event_type'], ET_INFO)
             stat_rep = 'processed_local_blocks=%i, invalid_local_blocks=0, repaired_foreign_blocks=%i, failed_repair_foreign_blocks=0'
-            self.assertTrue(stat_rep%(cnt87, cnt86) in event87[2], event87[2])
+            self.assertTrue(stat_rep%(cnt87, cnt86) in event87['event_message'], event87['event_message'])
 
             open(os.path.join(server1.get_range_dir(), data_key), 'wr').write('wrong data')
             open(os.path.join(server1.get_range_dir(), data_key2), 'ar').write('wrong data')
@@ -606,20 +610,21 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.assertEqual(rcode, 0, rmsg)
             time.sleep(2)
 
-            events = conn.select('SELECT notify_type, node_address, notify_msg FROM notification')
-            conn.execute('DELETE FROM notification')
+            db = SafeJsonFile(NDB)
+            data = db.read()
+            os.remove(NDB)
+            events = data.get('notifications', [])
+            events = filter(lambda e: e['event_topic']=='RepairDataBlocks', events)
 
             self.assertEqual(len(events), 1)
             for event in events:
-                if event[1] == '127.0.0.1:1986':
+                if event['event_provider'] == '127.0.0.1:1986':
                     event86 = event
-                elif event[1] == '127.0.0.1:1987':
+                elif event['event_provider'] == '127.0.0.1:1987':
                     event87 = event
 
-            self.assertEqual(event87[1], '127.0.0.1:1987')
             stat_rep = 'processed_local_blocks=%i, invalid_local_blocks=%i, repaired_foreign_blocks=%i, failed_repair_foreign_blocks=0'
-            self.assertTrue(stat_rep%(cnt87+cnt86, 1, 2) in event87[2], event87[2])
-            conn.close()
+            self.assertTrue(stat_rep%(cnt87+cnt86, 1, 2) in event87['event_message'], event87['event_message'])
         finally:
             if server:
                 server.stop()
