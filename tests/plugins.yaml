@@ -1,0 +1,4 @@
+operators:
+    DHT:
+        object_path: fabnet_dht.dht_operator.DHTOperator
+        version: '0.1'

@@ -1,0 +1,16 @@
+
+name = 'fabnet-dht'
+
+packages = ['fabnet_dht']
+
+bin_paths = []
+
+dependencies = {'gentoo': (),
+                'rhel': (),
+                'deb': ()}
+
+submodule = 'https://github.com/fabregas/fabnet_core/archive/master.zip'
+
+plugins_info = {'DHT': 'fabnet_dht.dht_operator.DHTOperator'}
+
+
