@@ -22,14 +22,14 @@ class DataBlockHeader:
     HEADER_LEN = struct.calcsize(STRUCT_FMT)
 
     @classmethod
-    def pack(self, key, replica_count, checksum, user_id=None):
+    def pack(cls, key, replica_count, checksum, user_id=None):
         if not user_id:
             user_id = 0
         if type(user_id) in (str, unicode):
             #FIXME: logger.warning('User ID should be integer value for saving into block metadata')
             user_id = 0
-        t0 = datetime.utcnow()
-        unixtime = time.mktime(t0.timetuple())
+
+        unixtime = time.mktime(datetime.utcnow().timetuple())
 
         try:
             header = struct.pack(STRUCT_FMT, DATA_BLOCK_LABEL, unixtime, key.decode('hex'), \
@@ -56,7 +56,7 @@ class DataBlockHeader:
     def check_raw_data(cls, binary_data, exp_checksum=None):
         header = binary_data.read(cls.HEADER_LEN)
 
-        _, _, checksum, user_id, _ = cls.unpack(header)
+        _, _, checksum, _, _ = cls.unpack(header)
 
         if exp_checksum and exp_checksum != checksum:
             raise Exception('Data checksum is not equal to expected')

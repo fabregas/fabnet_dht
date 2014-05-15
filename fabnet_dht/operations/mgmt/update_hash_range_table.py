@@ -45,11 +45,6 @@ class UpdateHashRangeTableOperation(OperationBase):
         if self.operator.get_status() == DS_DESTROYING:
             return
 
-        _, icnt = self.operator.get_ranges_table_status()
-        if icnt == 0:
-            logger.debug('Received update for hash ranges table, but it is not initialized yet. Skip operation...')
-            return
-
         append_lst = packet.parameters.get('append', [])
         rm_lst = packet.parameters.get('remove', [])
 
@@ -62,7 +57,7 @@ class UpdateHashRangeTableOperation(OperationBase):
             logger.debug('RM RANGE: %s'%', '.join([r.to_str() for r in rm_obj_list]))
             logger.debug('APP RANGE: %s'%', '.join([a.to_str() for a in ap_obj_list]))
         except Exception, err:
-            logger.error('UpdateHashRangeTable error: %s'%err)
+            logger.debug('UpdateHashRangeTable error: %s STATUS=%s'%(err, self.operator.get_status()))
         finally:
             self._unlock()
 

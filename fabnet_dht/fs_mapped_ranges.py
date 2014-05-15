@@ -79,7 +79,7 @@ class TmpFile:
             fobj.close()
 
     def hardlink(self):
-        link = '%s.%s'%(self.__f_path, self.__link_idx)
+        link = '%s.%s' % (self.__f_path, self.__link_idx)
         os.link(self.__f_path, link)
         self.__link_idx += 1
         return link
@@ -247,7 +247,7 @@ class FSHashRanges:
         self.__end = self._long_key(end)
         self.__save_path = save_path
 
-        dir_name = '%040x_%040x'%(self.__start, self.__end)
+        dir_name = '%040x_%040x' % (self.__start, self.__end)
         self.__range_dir = os.path.join(save_path, dir_name)
         if not os.path.exists(self.__range_dir):
             try:

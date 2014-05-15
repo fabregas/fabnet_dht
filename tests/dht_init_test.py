@@ -75,8 +75,7 @@ class TestServerThread(threading.Thread):
         else:
             node_type = 'DHT'
 
-        config = {'WAIT_RANGE_TIMEOUT': 0.1,
-                 'INIT_DHT_WAIT_NEIGHBOUR_TIMEOUT': 0.1,
+        config = {'INIT_DHT_WAIT_NEIGHBOUR_TIMEOUT': 0.1,
                  'MONITOR_DHT_RANGES_TIMEOUT': 1,
                  'CHECK_HASH_TABLE_TIMEOUT': 1,
                  'WAIT_FILE_MD_TIMEDELTA': 0.1,

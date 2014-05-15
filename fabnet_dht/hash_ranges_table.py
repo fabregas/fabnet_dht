@@ -28,11 +28,8 @@ class HashRange:
         self.node_address = node_address
         self.__length = self.end - self.start
 
-    #def __repr__(self):
-    #    return '(%s-%s)%s'%(self.start, self.end, self.node_address)
-
     def to_str(self):
-        return '{%040x-%040x}-%s'%(self.start, self.end, self.node_address)
+        return '{%040x-%040x}-%s' % (self.start, self.end, self.node_address)
 
     def length(self):
         return self.__length
@@ -104,14 +101,14 @@ class HashRangesTable:
                     #range is already exists in table
                     return
 
-                err_msg = 'Cant append range [%040x-%040x], it is crossed by existing [%040x-%040x] range' \
-                            % (start, end, r_obj.start, r_obj.end)
+                err_msg = 'Cant append range [%040x-%040x]%s, it is crossed by existing [%040x-%040x]%s range' \
+                            % (start, end, node_addr, r_obj.start, r_obj.end, r_obj.node_address)
                 raise RangeException(err_msg)
 
             r_obj = self.find(end)
             if r_obj:
-                err_msg = 'Cant append range [%040x-%040x], it is crossed by existing [%040x-%040x] range' \
-                            % (start, end, r_obj.start, r_obj.end)
+                err_msg = 'Cant append range [%040x-%040x]%s, it is crossed by existing [%040x-%040x]%s range' \
+                            % (start, end, node_addr, r_obj.start, r_obj.end, r_obj.node_address)
                 raise RangeException(err_msg)
 
             h_range = HashRange(start, end, node_addr)
@@ -213,22 +210,22 @@ class HashRangesTable:
             logger.debug('HASH RANGES: %s'%'\n'.join([r.to_str() for r in self.__ranges]))
 
             if is_old_ex:
-                s = 'OLD(-)/NEW(+) HASHES IN TABLES:\n'
+                log_s = 'OLD(-)/NEW(+) HASHES IN TABLES:\n'
                 for range_o in self.iter_table():
                     for old_range in is_old_ex:
                         if old_range.to_str() == range_o.to_str():
                             break
                     else:
-                        s += '+ %s\n'%range_o.to_str()
+                        log_s += '+ %s\n' % range_o.to_str()
 
                 for old_range in is_old_ex:
                     for range_o in self.iter_table():
                         if old_range.to_str() == range_o.to_str():
                             break
                     else:
-                        s += '- %s\n'%old_range.to_str()
+                        log_s += '- %s\n' % old_range.to_str()
 
-                logger.info(s)
+                logger.info(log_s)
 
             self.__blocked.clear()
             if is_old_ex:

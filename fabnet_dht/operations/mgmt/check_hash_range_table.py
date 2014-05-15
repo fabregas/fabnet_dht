@@ -27,7 +27,7 @@ class CheckHashRangeTableOperation(OperationBase):
         for i in xrange(self.operator.get_config_value('RANGES_TABLE_FLAPPING_TIMEOUT')):
             if force:
                 break
-            c_mod_index, c_ranges_count = self.operator.get_ranges_table_status()
+            c_mod_index, c_ranges_count, _ = self.operator.get_ranges_table_status()
             if c_ranges_count == 0:
                 break
             if c_mod_index == mod_index and ranges_count == c_ranges_count:
@@ -64,7 +64,7 @@ class CheckHashRangeTableOperation(OperationBase):
         if range_end is None:
             raise Exception('range_end parameter is expected for CheckHashRangeTable operation')
 
-        c_mod_index, c_ranges_count = self.operator.get_ranges_table_status()
+        c_mod_index, c_ranges_count, _ = self.operator.get_ranges_table_status()
 
         found_range = self._find_range(range_start, range_end, packet.sender)
         if not found_range:

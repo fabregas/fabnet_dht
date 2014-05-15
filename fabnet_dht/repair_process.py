@@ -43,8 +43,8 @@ class RepairProcess:
             self.__check_range_end = long(self.__check_range_end, 16)
 
     def __get_stat(self):
-        return 'processed_local_blocks=%s, invalid_local_blocks=%s, '\
-                'repaired_foreign_blocks=%s, failed_repair_foreign_blocks=%s'%\
+        return 'processed_local_blocks=%s, invalid_local_blocks=%s, ' \
+                'repaired_foreign_blocks=%s, failed_repair_foreign_blocks=%s'% \
                 (self.__processed_local_blocks, self.__invalid_local_blocks,
                 self.__repaired_foreign_blocks, self.__failed_repair_foreign_blocks)
 

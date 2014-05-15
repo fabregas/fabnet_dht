@@ -333,7 +333,10 @@ def create_virt_net(nodes_count, port_move=0):
         else:
             n_node = random.choice(addresses)
             i = int(addresses[-1].split(':')[-1])+1
-            wait_node(n_node)
+            if len(addresses) > 1:
+                wait_node(n_node)
+            else:
+                time.sleep(1)
 
         address = '127.0.0.1:%s'%i
         addresses.append(address)
@@ -396,6 +399,11 @@ def check_stat(address):
             logger.error('ERROR: %s'%err)
             raise err
 
+def _print_raw_ranges(ranges, out_streem):
+    for address, (start, end, range_size, replicas_size) in ranges.items():
+        print('On node %s: {%s-%s} = %s KB (%s KB)'%(address, start, end,\
+                 range_size/1024, replicas_size/1024))
+    print('\n'*10)
 
 def print_ranges(addresses, out_streem):
     client = FriClient()
@@ -415,7 +423,11 @@ def print_ranges(addresses, out_streem):
 
     h_ranges = HashRangesTable()
     for address, (start, end, _, _) in ranges.items():
-        h_ranges.append(long(start,16), long(end,16), address)
+        try:
+            h_ranges.append(long(start,16), long(end,16), address)
+        except Exception, err:
+            _print_raw_ranges(ranges, out_streem)
+            raise err
 
     for h_range in h_ranges.iter_table():
         start = h_range.start

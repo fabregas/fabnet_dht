@@ -33,17 +33,17 @@ class KeyUtils:
         keys = [key]
         r_len = FULL_RANGE_LEN / (replica_count + 1)
         key = long(key, 16)
-        for i in xrange(replica_count):
+        for _ in xrange(replica_count):
             key = (key + r_len) % FULL_RANGE_LEN
-            keys.append('%040x'%key)
+            keys.append('%040x' % key)
 
         return keys
 
     @classmethod
     def to_hex(cls, key):
         if type(key) in (int, long):
-            return '%040x'%key
+            return '%040x' % key
         if len(key) != 40:
-            return '%040x'%int(key,16)
+            return '%040x' % int(key, 16)
         return key
 

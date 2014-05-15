@@ -2,6 +2,7 @@
 MIN_HASH = 0L
 MAX_HASH = pow(2, 160) - 1
 
+DS_PREINIT = 'preinit'
 DS_INITIALIZE = 'init'
 DS_NORMALWORK = 'normwork'
 DS_DESTROYING = 'destroying'
