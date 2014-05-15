@@ -27,23 +27,23 @@ from fabnet_dht.repair_process import RepairProcess
 from fabnet_dht.constants import DS_INITIALIZE, DS_DESTROYING, DS_NORMALWORK, \
             DEFAULT_DHT_CONFIG, MIN_HASH, MAX_HASH, RC_OLD_DATA, RC_NO_FREE_SPACE
 from fabnet_dht.fs_mapped_ranges import FSHashRanges
-from fabnet_dht.operations.get_range_data_request import GetRangeDataRequestOperation
-from fabnet_dht.operations.get_ranges_table import GetRangesTableOperation
-from fabnet_dht.operations.put_data_block import PutDataBlockOperation
-from fabnet_dht.operations.get_data_block import GetDataBlockOperation
-from fabnet_dht.operations.check_data_block import CheckDataBlockOperation
-from fabnet_dht.operations.repair_data_blocks import RepairDataBlocksOperation
-from fabnet_dht.operations.split_range_cancel import SplitRangeCancelOperation
-from fabnet_dht.operations.split_range_request import SplitRangeRequestOperation
-from fabnet_dht.operations.pull_subrange_request import PullSubrangeRequestOperation
-from fabnet_dht.operations.update_hash_range_table import UpdateHashRangeTableOperation
-from fabnet_dht.operations.check_hash_range_table import CheckHashRangeTableOperation
+from fabnet_dht.operations.mgmt.get_range_data_request import GetRangeDataRequestOperation
+from fabnet_dht.operations.mgmt.get_ranges_table import GetRangesTableOperation
+from fabnet_dht.operations.mgmt.split_range_cancel import SplitRangeCancelOperation
+from fabnet_dht.operations.mgmt.split_range_request import SplitRangeRequestOperation
+from fabnet_dht.operations.mgmt.pull_subrange_request import PullSubrangeRequestOperation
+from fabnet_dht.operations.mgmt.update_hash_range_table import UpdateHashRangeTableOperation
+from fabnet_dht.operations.mgmt.check_hash_range_table import CheckHashRangeTableOperation
 from fabnet_dht.operations.get_data_keys import GetKeysInfoOperation
 from fabnet_dht.operations.put_data_keys import PutKeysInfoOperation
 from fabnet_dht.operations.client_get import ClientGetOperation
 from fabnet_dht.operations.client_put import ClientPutOperation
 from fabnet_dht.operations.delete_data_block import DeleteDataBlockOperation
 from fabnet_dht.operations.client_delete import ClientDeleteOperation
+from fabnet_dht.operations.put_data_block import PutDataBlockOperation
+from fabnet_dht.operations.get_data_block import GetDataBlockOperation
+from fabnet_dht.operations.check_data_block import CheckDataBlockOperation
+from fabnet_dht.operations.repair_data_blocks import RepairDataBlocksOperation
 from fabnet_dht.hash_ranges_table import HashRange, HashRangesTable
 
 OPERLIST = [GetRangeDataRequestOperation, GetRangesTableOperation,

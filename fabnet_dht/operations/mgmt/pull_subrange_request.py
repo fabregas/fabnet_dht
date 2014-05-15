@@ -4,7 +4,7 @@ Copyright (C) 2012 Konstantin Andrusenko
     See the documentation for further information on copyrights,
     or contact the author. All Rights Reserved.
 
-@package fabnet_dht.operations.pull_subrange_request
+@package fabnet_dht.operations.mgmt.pull_subrange_request
 
 @author Konstantin Andrusenko
 @date November 08, 2012

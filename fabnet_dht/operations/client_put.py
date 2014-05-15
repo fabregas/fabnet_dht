@@ -103,6 +103,7 @@ class ClientPutOperation(OperationBase):
             if local_save:
                 key, is_replica = local_save
                 self.operator.put_data_block(key, tempfile.file_path(), is_replica, carefully_save)
+                tempfile.remove()
         except Exception, err:
             succ_count -= 1
             msg = 'Saving data block to local range is failed: %s'%err

@@ -40,14 +40,14 @@ from fabnet_dht import constants
 from fabnet_dht.hash_ranges_table import HashRangesTable
 from fabnet_dht.dht_operator import DHTOperator
 from fabnet_dht import dht_operator
-from fabnet_dht.operations import split_range_request
-from fabnet_dht.operations.get_range_data_request import GetRangeDataRequestOperation
-from fabnet_dht.operations.get_ranges_table import GetRangesTableOperation
+from fabnet_dht.operations.mgmt import split_range_request
+from fabnet_dht.operations.mgmt.get_range_data_request import GetRangeDataRequestOperation
+from fabnet_dht.operations.mgmt.get_ranges_table import GetRangesTableOperation
+from fabnet_dht.operations.mgmt.split_range_cancel import SplitRangeCancelOperation
+from fabnet_dht.operations.mgmt.split_range_request import SplitRangeRequestOperation
+from fabnet_dht.operations.mgmt.update_hash_range_table import UpdateHashRangeTableOperation
+from fabnet_dht.operations.mgmt.check_hash_range_table import CheckHashRangeTableOperation
 from fabnet_dht.operations.put_data_block import PutDataBlockOperation
-from fabnet_dht.operations.split_range_cancel import SplitRangeCancelOperation
-from fabnet_dht.operations.split_range_request import SplitRangeRequestOperation
-from fabnet_dht.operations.update_hash_range_table import UpdateHashRangeTableOperation
-from fabnet_dht.operations.check_hash_range_table import CheckHashRangeTableOperation
 
 #logger.setLevel(logging.DEBUG)
 

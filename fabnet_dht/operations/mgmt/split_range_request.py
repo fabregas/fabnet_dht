@@ -4,21 +4,21 @@ Copyright (C) 2012 Konstantin Andrusenko
     See the documentation for further information on copyrights,
     or contact the author. All Rights Reserved.
 
-@package fabnet_dht.operations.get_ranges_table
+@package fabnet_dht.operations.mgmt.split_range_request
 
 @author Konstantin Andrusenko
-@date September 21, 2012
+@date September 23, 2012
 """
+import os
 from fabnet.core.operation_base import  OperationBase
 from fabnet.core.fri_base import FabnetPacketResponse
-from fabnet.core.constants import RC_ERROR, RC_OK, NODE_ROLE
 from fabnet.utils.logger import oper_logger as logger
+from fabnet.core.constants import RC_OK, RC_ERROR, NODE_ROLE
 
-from fabnet_dht.constants import DS_INITIALIZE
 
-class GetRangesTableOperation(OperationBase):
+class SplitRangeRequestOperation(OperationBase):
     ROLES = [NODE_ROLE]
-    NAME = 'GetRangesTable'
+    NAME = 'SplitRangeRequest'
 
     def process(self, packet):
         """In this method should be implemented logic of processing
@@ -28,14 +28,23 @@ class GetRangesTableOperation(OperationBase):
         @return object of FabnetPacketResponse
                 or None for disabling packet response to sender
         """
-        if self.operator.get_status() == DS_INITIALIZE:
-            return FabnetPacketResponse(ret_code=RC_ERROR, ret_message='Node is not initialized yet!')
+        start_key = packet.parameters.get('start_key', None)
+        if start_key is None:
+            raise Exception('start_key is not found in SplitRangeRequest packet')
 
-        ranges_table = self.operator.dump_ranges_table()
+        end_key = packet.parameters.get('end_key', None)
+        if end_key is None:
+            raise Exception('end_key is not found in SplitRangeRequest packet')
 
-        logger.info('Sending ranges table to %s'%packet.sender)
+        try:
+            range_size = self.operator.split_range(start_key, end_key)
+        except Exception, err:
+            return FabnetPacketResponse(ret_code=RC_ERROR, ret_message=str(err))
 
-        return FabnetPacketResponse(ret_parameters={'ranges_table': ranges_table})
+        logger.debug('Range is splitted for %s. Subrange size: %s'%(packet.sender, range_size))
+
+        return FabnetPacketResponse(ret_parameters={'range_size': range_size})
+
 
     def callback(self, packet, sender=None):
         """In this method should be implemented logic of processing
@@ -49,18 +58,11 @@ class GetRangesTableOperation(OperationBase):
                 or None for disabling packet resending
         """
         if packet.ret_code != RC_OK:
-            logger.info('[GetRangesTableCallback] Node %s does not initialized yet...'%packet.from_node)
-            return
-
-        logger.info('Recevied ranges table')
-
-        prev_ranges_count = self.operator.restore_ranges_table(str(packet.ret_parameters['ranges_table']))
-        logger.info('Ranges table is loaded to fabnet node')
-
-        #prev_ranges_count == 1 --- first DHT communicate 
-        if (self.operator.get_status() == DS_INITIALIZE) or (prev_ranges_count == 1):
+            logger.error('Cant split range from %s. Details: %s'%(sender, packet.ret_message))
+            logger.info('Trying select other hash range...')
             self.operator.start_as_dht_member()
         else:
-            self.operator.check_near_range(True) #check with reinit_dht=True
+            subrange_size = int(packet.ret_parameters['range_size'])
+            self.operator.accept_foreign_subrange(packet.from_node, subrange_size)
 
 

@@ -4,7 +4,7 @@ Copyright (C) 2012 Konstantin Andrusenko
     See the documentation for further information on copyrights,
     or contact the author. All Rights Reserved.
 
-@package fabnet_dht.operations.update_hash_range_table
+@package fabnet_dht.operations.mgmt.update_hash_range_table
 
 @author Konstantin Andrusenko
 @date September 26, 2012

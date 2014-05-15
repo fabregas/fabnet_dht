@@ -66,6 +66,7 @@ class PutDataBlockOperation(OperationBase):
         try:
             tempfile = TmpFile(tempfile_path, data_list)
             self.operator.put_data_block(key, tempfile_path, is_replica, carefully_save)
+            tempfile.remove()
         except FSHashRangesOldDataDetected, err:
             return FabnetPacketResponse(ret_code=RC_OLD_DATA, ret_message=str(err))
         except FSHashRangesNoFreeSpace, err:
