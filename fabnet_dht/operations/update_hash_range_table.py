@@ -63,8 +63,6 @@ class UpdateHashRangeTableOperation(OperationBase):
             logger.debug('APP RANGE: %s'%', '.join([a.to_str() for a in ap_obj_list]))
         except Exception, err:
             logger.error('UpdateHashRangeTable error: %s'%err)
-            if not packet.sender:
-                self.operator.check_dht_range(False) #reinit=False
         finally:
             self._unlock()
 

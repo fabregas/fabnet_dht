@@ -17,7 +17,7 @@ from fabnet.core.fri_base import FabnetPacketResponse
 from fabnet.core.constants import RC_OK, RC_ERROR, NODE_ROLE, RC_DONT_STARTED
 from fabnet.utils.logger import oper_logger as logger
 
-from fabnet_dht.constants import RC_NEED_UPDATE, DS_INITIALIZE, DS_DESTROYING 
+from fabnet_dht.constants import RC_NEED_UPDATE, DS_INITIALIZE, DS_DESTROYING, RC_JUST_WAIT 
 
 class CheckHashRangeTableOperation(OperationBase):
     ROLES = [NODE_ROLE]
@@ -72,11 +72,13 @@ class CheckHashRangeTableOperation(OperationBase):
             if ranges_count < c_ranges_count:
                 return FabnetPacketResponse(ret_code=RC_NEED_UPDATE, \
                         ret_parameters={'mod_index': c_mod_index, 'ranges_count': c_ranges_count})
-            elif ranges_count == c_ranges_count and c_mod_index == f_mod_index \
-                    and packet.sender < self.self_address:
-                return FabnetPacketResponse(ret_code=RC_NEED_UPDATE, \
+            elif ranges_count == c_ranges_count and c_mod_index == f_mod_index:
+                if packet.sender > self.self_address:
+                    return FabnetPacketResponse(ret_code=RC_NEED_UPDATE, \
                         ret_parameters={'mod_index': c_mod_index, 'ranges_count': c_ranges_count,
                                         'force': True})
+                elif packet.sender < self.self_address:
+                    return FabnetPacketResponse(ret_code=RC_JUST_WAIT)
 
         logger.debug('CheckHashRangeTable: f_mod_index=%s c_mod_index=%s'%(f_mod_index, c_mod_index))
         if f_mod_index >= c_mod_index:
@@ -125,3 +127,6 @@ class CheckHashRangeTableOperation(OperationBase):
         elif packet.ret_code == RC_NEED_UPDATE:
             self._get_ranges_table(packet.from_node, packet.ret_parameters['mod_index'], \
                     packet.ret_parameters['ranges_count'], packet.ret_parameters.get('force', False))
+        elif packet.ret_code == RC_JUST_WAIT:
+            pass
+

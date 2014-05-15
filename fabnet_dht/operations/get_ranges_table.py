@@ -54,11 +54,11 @@ class GetRangesTableOperation(OperationBase):
 
         logger.info('Recevied ranges table')
 
-        self.operator.restore_ranges_table(str(packet.ret_parameters['ranges_table']))
+        prev_ranges_count = self.operator.restore_ranges_table(str(packet.ret_parameters['ranges_table']))
         logger.info('Ranges table is loaded to fabnet node')
 
-        if self.operator.get_status() == DS_INITIALIZE:
-            logger.info('Starting node as DHT member')
+        #prev_ranges_count == 1 --- first DHT communicate 
+        if (self.operator.get_status() == DS_INITIALIZE) or (prev_ranges_count == 1):
             self.operator.start_as_dht_member()
         else:
             self.operator.check_near_range(True) #check with reinit_dht=True

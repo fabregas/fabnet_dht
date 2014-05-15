@@ -231,6 +231,9 @@ class HashRangesTable:
                 logger.info(s)
 
             self.__blocked.clear()
+            if is_old_ex:
+                return len(is_old_ex)
+            return 0
         finally:
             self.__lock.release()
 

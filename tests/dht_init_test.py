@@ -416,7 +416,7 @@ class TestDHTInitProcedure(unittest.TestCase):
                 server1.stop()
 
 
-    def __test03_dht_collisions_resolutions(self):
+    def test03_dht_collisions_resolutions(self):
         server = server1 = None
         try:
             home1 =  self._make_fake_hdd('node_1986', 1024, '/dev/loop0')

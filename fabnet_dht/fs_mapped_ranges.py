@@ -451,7 +451,7 @@ class FSHashRanges:
             files = os.listdir(child_range_dir)
             perc_part = len(files)/10
 
-            logger.info('Joining range %s...'%child_range_dir)
+            logger.info('Joining range %s...'%self.__pretty_dir(child_range_dir))
 
             for cnt, digest in enumerate(files):
                 if perc_part and (cnt+1) % perc_part == 0:
@@ -463,6 +463,11 @@ class FSHashRanges:
 
             logger.info('Range is joined!')
 
+    def __pretty_dir(self, path):
+        parts = os.path.basename(path).split('_')
+        if len(parts) != 2:
+            return path
+        return os.path.join(os.path.dirname(path), '_'.join(map(lambda p: p[:4]+'*', parts)))
 
     def __split_data(self):
         files = os.listdir(self.__range_dir)

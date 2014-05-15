@@ -66,8 +66,8 @@ class DHTOperator(Operator):
 
         self.status = DS_INITIALIZE
         self.ranges_table = HashRangesTable()
-        if is_init_node:
-            self.ranges_table.append(MIN_HASH, MAX_HASH, self.self_address)
+        #if is_init_node:
+        #    self.ranges_table.append(MIN_HASH, MAX_HASH, self.self_address)
 
         self.save_path = os.path.join(home_dir, 'dht_range')
         if not os.path.exists(self.save_path):
@@ -75,10 +75,11 @@ class DHTOperator(Operator):
 
         self.__split_requests_cache = []
         self.__dht_range = FSHashRanges.discovery_range(self.save_path, ret_full=is_init_node)
+        self.ranges_table.append(self.__dht_range.get_start(), self.__dht_range.get_end(), self.self_address)
         self.__start_dht_try_count = 0
         self.__init_dht_thread = None
-        if is_init_node:
-            self.status = DS_NORMALWORK
+        #if is_init_node:
+        #    self.status = DS_NORMALWORK
 
         self.__check_hash_table_thread = CheckLocalHashTableThread(self)
         self.__check_hash_table_thread.setName('%s-CheckLocalHashTableThread'%self.node_name)
@@ -87,6 +88,8 @@ class DHTOperator(Operator):
         self.__monitor_dht_ranges = MonitorDHTRanges(self)
         self.__monitor_dht_ranges.setName('%s-MonitorDHTRanges'%self.node_name)
         self.__monitor_dht_ranges.start()
+
+        self.status = DS_NORMALWORK
 
     def get_status(self):
         return self.status
@@ -207,6 +210,7 @@ class DHTOperator(Operator):
         if self.status == DS_DESTROYING:
             return
 
+        logger.info('Starting as DHT member')
         self.status = DS_INITIALIZE
         dht_range = self.get_dht_range()
 
@@ -273,12 +277,17 @@ class DHTOperator(Operator):
         logger.info('New node range: %040x-%040x'%(dht_range.get_start(), dht_range.get_end()))
 
     def check_dht_range(self, reinit=True):
+        '''check current DHT range
+        return True if current DHT range has 'unstable' status (initializing, spliting, invalid)
+        return False if current DHT range is OK
+        if current DHT range is invalid and reinit==True -> start init DHT process
+        '''
         if self.status == DS_INITIALIZE:
-            return
+            return True
 
         dht_range = self.get_dht_range()
         if dht_range.get_subranges():
-            return
+            return True
 
         start = dht_range.get_start()
         end = dht_range.get_end()
@@ -292,14 +301,10 @@ class DHTOperator(Operator):
                 msg += ' hash table range - [%040x-%040x]%s... my range - [%040x-%040x]%s'%\
                         (range_obj.start, range_obj.end, range_obj.node_address, start, end, self.self_address)
             else:
-                msg += 'Not found in hash table'
+                msg += 'Not found in hash table [%040x-%040x]%s'%(start, end, self.self_address)
             logger.info(msg)
 
             if (not range_obj) or reinit:
-                logger.warning('DHT range on this node is not found in ranges_table')
-                if range_obj:
-                    logger.info('Self range: %040x-%040x, In hash table: %040x-%040x(%s)'%\
-                        (start, end, range_obj.start, range_obj.end, range_obj.node_address))
                 logger.info('Trying reinit node as DHT member...')
                 self.start_as_dht_member()
             return True
@@ -468,7 +473,7 @@ class DHTOperator(Operator):
         return self.ranges_table.dump()
 
     def restore_ranges_table(self, ranges_table_dump):
-        self.ranges_table.load(ranges_table_dump)
+        return self.ranges_table.load(ranges_table_dump)
 
     def apply_ranges_table_changes(self, rm_obj_list, ap_obj_list):
         self.ranges_table.apply_changes(rm_obj_list, ap_obj_list)
