@@ -209,7 +209,7 @@ class HashRangesTable:
 
             logger.debug('HASH RANGES: %s'%'\n'.join([r.to_str() for r in self.__ranges]))
 
-            if is_old_ex:
+            if is_old_ex and len(is_old_ex) > 1:
                 log_s = 'OLD(-)/NEW(+) HASHES IN TABLES:\n'
                 for range_o in self.iter_table():
                     for old_range in is_old_ex:

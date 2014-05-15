@@ -84,8 +84,11 @@ def create_network(ip_addr, hdds_size):
 
         logger.warning('{SNP} STARTING NODE %s'%address)
         p = subprocess.Popen(['/usr/bin/python', FABNET_NODE_BIN, address, n_node, node_name, homedir, 'DHT', '--nodaemon'], env=ENVIRON)
+        if processes:
+            wait_node(address)
+        else:
+            time.sleep(1)
         processes.append(p)
-        wait_node(address)
         logger.warning('{SNP} NODE %s IS STARTED'%address)
 
     print 'Network is started!'
