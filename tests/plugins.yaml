@@ -7,3 +7,9 @@ operators:
         object_path: test_monitor.TestMonitorOperator
         version: '0.0.1'
 
+mgmt_plugins:
+  DHT:
+    api_plugins:
+        - fabnet_dht.mgmt.dht_mgmt_api
+    cli_plugins:
+        - fabnet_dht.mgmt.dht_mgmt_cli
