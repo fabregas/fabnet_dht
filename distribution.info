@@ -11,6 +11,8 @@ dependencies = {'gentoo': (),
 
 submodule = 'https://github.com/fabregas/fabnet_core/archive/master.zip'
 
-plugins_info = {'DHT': 'fabnet_dht.dht_operator.DHTOperator'}
-
+plugins_info = {'operators': {'DHT': 'fabnet_dht.dht_operator.DHTOperator'},
+                'mgmt_plugins': {'api_plugins': ['fabnet_dht.mgmt.dht_mgmt_api'],
+                                'cli_plugins': [],
+                                'rest_plugins': []}}
 
