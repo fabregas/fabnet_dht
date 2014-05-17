@@ -111,7 +111,8 @@ class TestDHTMgmtCLI(TestMgmtCLI):
             TestMgmtCLI.CLI = cli
 
             self._cmd('help repair-dht-data', 'repair-data')
-            self._cmd('repair-dht-data', ['No one online node found'])
+            self._cmd('repair-dht-data', 'Usage:')
+            self._cmd('repair-dht-data --full', ['No one online node found'])
             self._cmd('repair-dht-data test_node[01-04]', ['checking data blocks at test_node02', 'Error!'])
 
             self._cmd('help show-repair-info', 'shrepair')

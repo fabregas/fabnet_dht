@@ -40,6 +40,8 @@ class RepairDataBlocksOperation(OperationBase):
         finally:
             self._unlock()
 
+        if packet.sync:
+            return
         return packet
 
 

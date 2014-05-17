@@ -77,17 +77,18 @@ def command_dht_stat(cli, params):
 
 
 
-@cli_command(51, 'repair-dht-data', 'repair_data', 'repair-data', 'repairdata')
+@cli_command(51, 'repair-dht-data', 'repair_data', 'repair-data', 'repairdata', validator=(str,))
 def command_repair_data(cli, params):
-    '''[<node(s)>]
+    '''<node(s)> | --full 
     Check data blocks and repair corrupted (or lost) data
-    If no nodes specified - check and repair all data on all DHT nodes asynchronously
+    If --full flag specified - check and repair all data on all DHT nodes asynchronously
     Arguments in the <node(s)> list may include normal nodes names, a range of names in hostlist format.
     '''
-    if params:
-        nodes_list = parse_nodes(params[0])
-    else:
+    if '--full' in params:
         nodes_list = []
+    else:
+        nodes_list = parse_nodes(params[0])
+
     cli.mgmtManagementAPI.repair_data(cli.session_id, nodes_list, log=cli)
 
 
