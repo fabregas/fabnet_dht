@@ -11,7 +11,7 @@ from fabnet_dht.constants import DS_NORMALWORK
 START_DHT_FLAG = False
 
 @MgmtApiMethod(ROLE_NM)
-def start_nodes(engine, session_id, nodes_list=[], log=None, wait_routine=None):
+def start_nodes(engine, session_id, nodes_list=[], log=None, wait_routine=None, reboot=False):
     global START_DHT_FLAG
     START_DHT_FLAG = False
 
@@ -41,6 +41,6 @@ def start_nodes(engine, session_id, nodes_list=[], log=None, wait_routine=None):
             if log:
                 log.write('Node does not initialized at DHT member ...\n')
 
-    return nodes_mgmt.start_nodes(session_id, nodes_list, log, wait_routine)
+    return nodes_mgmt.start_nodes(session_id, nodes_list, log, wait_routine, reboot)
 
 
