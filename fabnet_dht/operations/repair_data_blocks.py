@@ -40,9 +40,8 @@ class RepairDataBlocksOperation(OperationBase):
         finally:
             self._unlock()
 
-        if packet.sync:
-            return
-        return packet
+        if packet.is_muticast:
+            return packet
 
 
     def process(self, packet):
