@@ -318,6 +318,9 @@ class DHTOperator(Operator):
         if self.status != DS_NORMALWORK:
             return
 
+        if self.status == DS_PREINIT:
+            self.set_status_to_normalwork()
+
         failed_range = self.check_dht_range(reinit=reinit_dht)
         if failed_range:
             return
