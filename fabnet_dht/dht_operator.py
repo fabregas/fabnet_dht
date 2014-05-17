@@ -113,7 +113,9 @@ class DHTOperator(Operator):
         self.call_network(req)
 
     def _take_range(self, range_obj):
-        logger.info('Take node old range. Updating hash range table on network...')
+        logger.info('Take node old range %040x-%040x. Updating hash range table on network...'% \
+                    (range_obj.start, range_obj.end))
+
         app_lst = [(range_obj.start, range_obj.end, range_obj.node_address)]
         parameters = {'append': app_lst, 'remove': []}
 
@@ -317,9 +319,6 @@ class DHTOperator(Operator):
     def check_near_range(self, reinit_dht=False):
         if self.status != DS_NORMALWORK:
             return
-
-        if self.status == DS_PREINIT:
-            self.set_status_to_normalwork()
 
         failed_range = self.check_dht_range(reinit=reinit_dht)
         if failed_range:

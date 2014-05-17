@@ -17,7 +17,8 @@ from fabnet.core.fri_base import FabnetPacketResponse
 from fabnet.core.constants import RC_OK, RC_ERROR, NODE_ROLE, RC_DONT_STARTED
 from fabnet.utils.logger import oper_logger as logger
 
-from fabnet_dht.constants import RC_NEED_UPDATE, DS_INITIALIZE, DS_DESTROYING, RC_JUST_WAIT 
+from fabnet_dht.constants import RC_NEED_UPDATE, DS_PREINIT, DS_INITIALIZE, \
+                                    DS_DESTROYING, RC_JUST_WAIT
 
 class CheckHashRangeTableOperation(OperationBase):
     ROLES = [NODE_ROLE]
@@ -119,14 +120,19 @@ class CheckHashRangeTableOperation(OperationBase):
             self.operator.remove_node_range(packet.from_node)
             time.sleep(self.operator.get_config_value('WAIT_DHT_TABLE_UPDATE'))
             self.operator.check_near_range()
+
         elif packet.ret_code == RC_OK:
             self.operator.check_near_range()
+
         elif packet.ret_code == RC_ERROR:
             logger.error('CheckHashRangeTable failed on %s. Details: %s %s'%(packet.from_node, \
                     packet.ret_code, packet.ret_message))
+
         elif packet.ret_code == RC_NEED_UPDATE:
             self._get_ranges_table(packet.from_node, packet.ret_parameters['mod_index'], \
                     packet.ret_parameters['ranges_count'], packet.ret_parameters.get('force', False))
+
         elif packet.ret_code == RC_JUST_WAIT:
-            pass
+            if self.operator.get_status() == DS_PREINIT:
+                 self.operator.set_status_to_normalwork()
 

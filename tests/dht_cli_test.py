@@ -35,11 +35,11 @@ class TestDHTMgmtCLI(TestMgmtCLI):
 
             TestMgmtCLI.CLI = cli
 
-            self._cmd('start-node', 'Usage: START-NODE')
-            self._cmd('help start-node', 'startnode')
-            self._cmd('start-node unkn-node', 'Error! [50] Node "unkn-node" does not found!')
-            self._cmd('start-node test_node01', ['Starting', 'Done'])
-            self._cmd('start-node test_node[00-01]', ['Node "test_node00" does not found!'])
+            self._cmd('start-nodes', 'Usage: START-NODE')
+            self._cmd('help start-nodes', 'startnodes')
+            self._cmd('start-nodes unkn-node', 'Error! [50] Node "unkn-node" does not found!')
+            self._cmd('start-nodes test_node01', ['Starting', 'Done'])
+            self._cmd('start-nodes test_node[00-01]', ['Node "test_node00" does not found!'])
 
             def test_call(nodeaddr, method, params=None):
                 if method != 'NodeStatistic':
@@ -47,7 +47,7 @@ class TestDHTMgmtCLI(TestMgmtCLI):
                 return FabnetPacketResponse(ret_code=0, ret_parameters={'DHTInfo':{'status': DS_NORMALWORK}})
             BaseMgmtCLIHandler.mgmtManagementAPI.fri_call_node = test_call
 
-            self._cmd('start-node test_node[01-04]', ['Starting', 'Done', 'Waiting'], ['Error'])
+            self._cmd('start-nodes test_node[01-04]', ['Starting', 'Done', 'Waiting'], ['Error'])
         finally:
             cli.sendline('exit')
             cli.expect(pexpect.EOF)
