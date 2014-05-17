@@ -8,6 +8,7 @@ import random
 import base64
 import socket
 import sys
+from datetime import datetime, timedelta
 path = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(path, '..'))
 sys.path.append(os.path.join(path, '../fabnet_core'))
@@ -15,6 +16,7 @@ sys.path.append(os.path.join(path, '../fabnet_mgmt'))
 sys.path.append(os.path.join(path, '../fabnet_mgmt/tests'))
 
 from cli_test import *
+from fabnet.core.constants import ET_INFO, ET_ALERT
 from fabnet.core.fri_base import FabnetPacketResponse
 from fabnet_dht.constants import DS_NORMALWORK 
 
@@ -90,6 +92,42 @@ class TestDHTMgmtCLI(TestMgmtCLI):
 
             self._cmd('help dht-stat', 'dhtstat')
             self._cmd('dht-stat', ['STATUS', 'SIZE', '80.51'])
+        finally:
+            cli.sendline('exit')
+            cli.expect(pexpect.EOF)
+            cli.close(force=True)
+            TestMgmtCLI.CLI = None
+
+    def test08_dht_repair(self):
+        cli = pexpect.spawn('telnet 127.0.0.1 8022', timeout=2)
+        cli.logfile_read = sys.stdout
+        try:
+            cli.expect('Username:')
+            cli.sendline('nodes-admin')
+            cli.expect('Password:')
+            cli.sendline('test')
+            cli.expect(PROMT)
+
+            TestMgmtCLI.CLI = cli
+
+            self._cmd('help repair-dht-data', 'repair-data')
+            self._cmd('repair-dht-data', ['No one online node found'])
+            self._cmd('repair-dht-data test_node[01-04]', ['checking data blocks at test_node02', 'Error!'])
+
+            self._cmd('help show-repair-info', 'shrepair')
+            self._cmd('show-repair-info', ['NODE', 'FAILED REPAIR'],  ['test_node03'])
+
+            MgmtDatabaseManager.MGMT_DB_NAME = 'test_fabnet_mgmt_db'
+            dbm = MgmtDatabaseManager('localhost')
+            
+            s = 'processed_local_blocks=%s, invalid_local_blocks=%s, \
+                    repaired_foreign_blocks=%s, failed_repair_foreign_blocks=%s'
+            dbm.notification('externa_addr_test_node:2222', ET_INFO, 'RepairDataBlocks', s%(2342,23,1,0), datetime.now()-timedelta(21))
+            dbm.notification('externa_addr_test_node:2222', ET_INFO, 'RepairDataBlocks', s%(631222,432,12,3), datetime.now())
+            dbm.notification('externa_addr_test_node:2221', ET_INFO, 'RepairDataBlocks', s%(1212, 1231231,0,123131), datetime.now()-timedelta(24))
+            dbm.notification('externa_addr_test_node:2223', ET_ALERT, 'RepairDataBlocks', 'Some error bla bla bla', datetime.now())
+
+            self._cmd('show-repair-info', ['NODE', 'FAILED REPAIR', 'test_node03', '631222', '432', '12', '3', '123131', 'Some error'], ['2342'])
         finally:
             cli.sendline('exit')
             cli.expect(pexpect.EOF)

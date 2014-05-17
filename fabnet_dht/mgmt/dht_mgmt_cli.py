@@ -1,5 +1,6 @@
 
 from fabnet_mgmt.cli.decorators import cli_command
+from fabnet_mgmt.cli.utils import parse_nodes
 from fabnet_dht.constants import *
 
 DHT_STATUSES_MAP = {DS_PREINIT: 'PERINIT', DS_INITIALIZE: 'INIT', \
@@ -27,7 +28,7 @@ def norm_size(size):
 
 
 @cli_command(50, 'dht-stat', 'get_nodes_stat', 'dhtstat')
-def command_operations_stat(cli, params):
+def command_dht_stat(cli, params):
     '''
     Show DHT statistic
     Fields description:
@@ -75,4 +76,51 @@ def command_operations_stat(cli, params):
                     free_size.center(12), free_size_percents.center(12) ))
 
 
+
+@cli_command(51, 'repair-dht-data', 'repair_data', 'repair-data', 'repairdata')
+def command_repair_data(cli, params):
+    '''[<node(s)>]
+    Check data blocks and repair corrupted (or lost) data
+    If no nodes specified - check and repair all data on all DHT nodes asynchronously
+    Arguments in the <node(s)> list may include normal nodes names, a range of names in hostlist format.
+    '''
+    if params:
+        nodes_list = parse_nodes(params[0])
+    else:
+        nodes_list = []
+    cli.mgmtManagementAPI.repair_data(cli.session_id, nodes_list, log=cli)
+
+
+@cli_command(52, 'show-repair-info', 'get_repair_info', 'showrepairinfo', 'shrepair')
+def command_show_repair_info(cli, params):
+    '''
+    Show repair information
+    This command shows information about last repair process on DHT nodes
+    Fields description:
+        NODE: fabnet node name
+        DATETIME: last repair finish date and time
+        LOCAL CNT: count of checked local data blocks
+        INVALID CNT: count of invalid local data blocks
+        REPAITED: count of repaired invalid data blocks
+        FAILED REPAIR: count of fails while repairing data blocks
+    '''
+    rep_info = cli.mgmtManagementAPI.get_repair_info(cli.session_id)
+    cli.writeresponse('-'*100)
+    cli.writeresponse('%-15s %s %s %s %s %s'%('NODE', 'DATETIME'.center(15),\
+                        'LOCAL CNT'.center(15), 'INVALID CNT'.center(15), \
+                        'REPAIRED'.center(15), 'FAILED REPAIR'.center(15)))
+    cli.writeresponse('-'*100)
+
+    err_list = []
+    for rec in sorted(rep_info, key=lambda i: i['node_name']):
+        dt = rec['dt'].strftime('%d.%m.%y %H:%M')
+        cli.writeresponse('%-15s %s %s %s %s %s'%(rec['node_name'], dt.center(15),\
+                        str(rec['local_bc']).center(15), str(rec['local_invalid_bc']).center(15), \
+                        str(rec['repaired_bc']).center(15), str(rec['fail_repaired_bc']).center(15)))
+        if rec['ret_msg']:
+            err_list.append((rec['node_name'], rec['ret_msg']))
+    if err_list:
+        cli.writeresponse('\nERROR MESSAGES:')
+        for n_name, err_msg in err_list:
+            cli.writeresponse('[%s]: %s'%(n_name, err_msg))
 
