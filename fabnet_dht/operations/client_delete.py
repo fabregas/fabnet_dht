@@ -63,7 +63,7 @@ class ClientDeleteOperation(OperationBase):
             else:
                 _, _, node_address = h_range
                 params = {'key': key, 'is_replica': is_replica, \
-                            'carefully_delete': True, 'user_id': packet.session_id}
+                            'carefully_delete': True, 'user_id': packet.user_id}
 
                 resp = self._init_operation(node_address, 'DeleteDataBlock', params, sync=True)
                 if resp.ret_code != RC_OK:

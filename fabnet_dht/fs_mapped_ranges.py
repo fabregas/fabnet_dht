@@ -553,8 +553,9 @@ class FSHashRanges:
         if carefully_delete:
             data = FileBasedChunks(file_path)
             header = data.read(DataBlockHeader.HEADER_LEN)
-            _, _, checksum, user_id, _ = DataBlockHeader.unpack(header)
-            if user_id != r_user_id:
+            _, _, checksum, user_id_hash, _ = DataBlockHeader.unpack(header)
+
+            if not DataBlockHeader.match(r_user_id, user_id_hash):
                 raise FSHashRangesPermissionDenied('Can not delete alien data block!')
         
         os.remove(file_path)

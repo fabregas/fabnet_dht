@@ -20,6 +20,7 @@ constants.FRI_CLIENT_TIMEOUT = 2
 
 from fabnet.utils.safe_json_file import SafeJsonFile
 from test_monitor import NOTIFICATIONS_DB
+from fabnet.core.key_storage import init_keystore
 
 from fabnet.core.fri_base import FabnetPacketRequest, FabnetPacketResponse
 from fabnet.core.fri_client import FriClient
@@ -50,6 +51,12 @@ from fabnet_dht.operations.mgmt.check_hash_range_table import CheckHashRangeTabl
 from fabnet_dht.operations.put_data_block import PutDataBlockOperation
 
 #logger.setLevel(logging.DEBUG)
+NODE1_KS = 'tests/ks/node00.p12'
+NODE2_KS = 'tests/ks/node01.p12'
+PASSWD = 'node'
+USER1_KS = 'tests/ks/user1.p12'
+USER2_KS = 'tests/ks/user2.p12'
+USER_PWD = 'user'
 
 MAX_HASH = constants.MAX_HASH
 
@@ -57,7 +64,7 @@ os.environ['FABNET_PLUGINS_CONF'] = 'tests/plugins.yaml'
 
 class TestServerThread(threading.Thread):
     SESSION_ID = 1234322321
-    def __init__(self, port, home_dir, neighbour=None, is_monitor=False, config={}):
+    def __init__(self, port, home_dir, neighbour=None, is_monitor=False, config={}, ks_path=''):
         threading.Thread.__init__(self)
         self.port = port
         self.home_dir = home_dir
@@ -66,9 +73,12 @@ class TestServerThread(threading.Thread):
         self.neighbour = neighbour
         self.config = config
         self.is_monitor = is_monitor
+        self.ks_path = ks_path
+        self.ks = None if not ks_path else init_keystore(ks_path, PASSWD)
         self.__lock = threading.Lock()
 
     def run(self):
+        os.system('cp ./tests/ks/certs.ca %s'%self.home_dir)
         address = '127.0.0.1:%s'%self.port
         if self.is_monitor:
             node_type = 'TestMonitor'
@@ -83,7 +93,8 @@ class TestServerThread(threading.Thread):
         config.update(self.config)
 
         node = Node('127.0.0.1', self.port, self.home_dir, 'node_%s'%self.port,
-                    ks_path=None, ks_passwd=None, node_type=node_type, config=config)
+                    ks_path=self.ks_path, ks_passwd=PASSWD, node_type=node_type, config=config)
+        node.set_auth_key(None)
         node.start(self.neighbour)
 
         self.__lock.acquire()
@@ -105,7 +116,7 @@ class TestServerThread(threading.Thread):
     def get_stat(self):
         packet_obj = FabnetPacketRequest(method='NodeStatistic', sync=True)
 
-        client = FriClient()
+        client = FriClient(self.ks)
         ret_packet = client.call_sync('127.0.0.1:%s'%self.port, packet_obj)
         if ret_packet.ret_code != 0:
             raise Exception('cant get node statistic. details: %s'%ret_packet.ret_message)
@@ -122,7 +133,8 @@ class TestServerThread(threading.Thread):
         req = FabnetPacketRequest(method='PutDataBlock',\
                             binary_data=data, sync=True,
                             parameters=params)
-        client = FriClient()
+
+        client = FriClient(self.ks)
         resp = client.call_sync('127.0.0.1:%s'%self.port, req)
         return resp
 
@@ -131,7 +143,8 @@ class TestServerThread(threading.Thread):
         params = {'key': key, 'is_replica':is_replica}
         req = FabnetPacketRequest(method='GetDataBlock',\
                             sync=True, parameters=params)
-        client = FriClient(session_id=user_id or self.SESSION_ID)
+
+        client = FriClient(self.ks)
         resp = client.call_sync('127.0.0.1:%s'%self.port, req)
         if resp.ret_code == constants.RC_NO_DATA:
             return None
@@ -139,8 +152,8 @@ class TestServerThread(threading.Thread):
             raise Exception('GetDataBlock operation failed on %s. Details: %s'%('127.0.0.1:%s'%self.port, resp.ret_message))
         return resp.binary_data
 
-    def put(self, data, wait_writes=3):
-        client = FriClient(session_id=self.SESSION_ID)
+    def put(self, data, wait_writes=3, client_ks=None):
+        client = FriClient(client_ks)
         checksum = hashlib.sha1(data).hexdigest()
 
         params = {'checksum': checksum, 'wait_writes_count': wait_writes, 'replica_count':2}
@@ -154,8 +167,8 @@ class TestServerThread(threading.Thread):
             raise Exception('put data failed: %s'%ret_packet.ret_message)
         return ret_packet.ret_parameters['key']
 
-    def get(self, key):
-        client = FriClient(session_id=self.SESSION_ID)
+    def get(self, key, client_ks=None):
+        client = FriClient(client_ks)
 
         params = {'key': key, 'replica_count': 2}
         packet_obj = FabnetPacketRequest(method='ClientGetData', parameters=params, sync=True)
@@ -163,8 +176,8 @@ class TestServerThread(threading.Thread):
         ret_packet = client.call_sync('127.0.0.1:%s'%self.port, packet_obj)
         return ret_packet
 
-    def delete(self, key, session_id=None):
-        client = FriClient(session_id=session_id or self.SESSION_ID)
+    def delete(self, key, client_ks=None):
+        client = FriClient(client_ks)
         params = {'key': key, 'replica_count': 2}
         packet_obj = FabnetPacketRequest(method='ClientDeleteData', parameters=params, sync=True)
 
@@ -178,7 +191,7 @@ class TestServerThread(threading.Thread):
         return os.path.join(self.home_dir, 'dht_range/%s_%s'%(h_start, h_end))
 
     def get_keys_info(self, key):
-        client = FriClient(session_id=self.SESSION_ID)
+        client = FriClient(self.ks)
         packet = FabnetPacketRequest(method='GetKeysInfo', \
                 parameters={'key': key, 'replica_count': 2}, sync=True)
 
@@ -215,10 +228,10 @@ class TestDHTInitProcedure(unittest.TestCase):
                 shutil.rmtree(home2)
             os.mkdir(home2)
 
-            server = TestServerThread(1986, home1, config={'MAX_USED_SIZE_PERCENTS': 99})
+            server = TestServerThread(1986, home1, config={'MAX_USED_SIZE_PERCENTS': 99},  ks_path=NODE1_KS)
             server.start()
             time.sleep(1)
-            server1 = TestServerThread(1987, home2, neighbour='127.0.0.1:1986', config={'MAX_USED_SIZE_PERCENTS': 99})
+            server1 = TestServerThread(1987, home2, neighbour='127.0.0.1:1986', config={'MAX_USED_SIZE_PERCENTS': 99}, ks_path=NODE2_KS)
             server1.start()
             time.sleep(.2)
             self.__wait_oper_status(server1, DS_NORMALWORK)
@@ -270,15 +283,11 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.assertEqual(resp.ret_code, RC_OK, resp.ret_message)
             data = server1.get_data_block(MAX_HASH-100, user_id=3232)
             self.assertEqual(data.data(), 'New data block')
-            try:
-                server1.get_data_block(MAX_HASH-100)
-            except Exception, err:
-                pass
-            else:
-                raise Exception('should be exception in this case')
 
+            client_ks = init_keystore(USER1_KS, USER_PWD)
             data = 'Test binary data '*10
-            key = server1.put(data, wait_writes=2)
+            key = server1.put(data, 2, client_ks)
+            master_key = key
             time.sleep(1)
             keys = server1.get_keys_info(key)
             for key, is_replica, node_addr in keys:
@@ -292,6 +301,15 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.assertEqual(len(files), 0, files)
             files = os.listdir(server1.get_tmp_dir())
             self.assertEqual(len(files), 0, files)
+
+            client_ks2 = init_keystore(USER2_KS, USER_PWD)
+            ret = server1.get(master_key, client_ks)
+            self.assertEqual(ret.ret_code, 0, ret.ret_message)
+            self.assertEqual(data, ret.binary_data.data())
+
+            ret = server1.get(master_key, client_ks2)
+            self.assertEqual(ret.ret_code, RC_PERMISSION_DENIED)
+
         finally:
             if server:
                 server.stop()
@@ -555,7 +573,7 @@ class TestDHTInitProcedure(unittest.TestCase):
             events = filter(lambda e: e['event_topic']=='RepairDataBlocks', events)
 
             stat = 'processed_local_blocks=%i, invalid_local_blocks=0, repaired_foreign_blocks=0, failed_repair_foreign_blocks=0'
-            self.assertEqual(len(events), 2)
+            self.assertEqual(len(events), 2, events)
             event86 = event87 = None
             for event in events:
                 if event['event_provider'] == '127.0.0.1:1986':
@@ -644,10 +662,10 @@ class TestDHTInitProcedure(unittest.TestCase):
                 shutil.rmtree(home2)
             os.mkdir(home2)
 
-            server = TestServerThread(1986, home1)
+            server = TestServerThread(1986, home1, ks_path=NODE1_KS)
             server.start()
             time.sleep(1)
-            server1 = TestServerThread(1987, home2, neighbour='127.0.0.1:1986')
+            server1 = TestServerThread(1987, home2, neighbour='127.0.0.1:1986', ks_path=NODE2_KS)
             server1.start()
             time.sleep(.2)
             self.__wait_oper_status(server, DS_NORMALWORK)
@@ -663,25 +681,27 @@ class TestDHTInitProcedure(unittest.TestCase):
 
             data_block = 'Hello, fabregas!'
             replica_block = 'This is replica data!'
-            key = server.put(data_block)
+            client_ks = init_keystore(USER1_KS, USER_PWD)
+            key = server.put(data_block, client_ks=client_ks)
 
-            resp = server.get(key)
+            resp = server.get(key, client_ks)
             self.assertEqual(resp.ret_code, RC_OK, resp.ret_message)
-            resp = server1.get(key)
+            resp = server1.get(key, client_ks)
             self.assertEqual(resp.ret_code, RC_OK)
 
-            resp = server.delete(None)
+            resp = server.delete(None, client_ks)
             self.assertNotEqual(resp.ret_code, RC_OK)
 
-            resp = server1.delete('2cf575e37b2df13071da2fc050372a923e6fbea3')
+            resp = server1.delete('2cf575e37b2df13071da2fc050372a923e6fbea3', client_ks)
             self.assertNotEqual(resp.ret_code, RC_OK)
 
-            resp = server.delete(key, session_id=234234)
+            client_ks2 = init_keystore(USER2_KS, USER_PWD)
+            resp = server.delete(key, client_ks2)
             self.assertEqual(resp.ret_code, RC_PERMISSION_DENIED, resp.ret_message)
 
-            resp = server.delete(key)
+            resp = server.delete(key, client_ks)
             self.assertEqual(resp.ret_code, RC_OK, resp.ret_message)
-            resp = server.get(key)
+            resp = server.get(key, client_ks)
             self.assertNotEqual(resp.ret_code, RC_OK)
         finally:
             if server:

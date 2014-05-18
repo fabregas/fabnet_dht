@@ -72,7 +72,7 @@ class ClientPutOperation(OperationBase):
         tempfile_path = self.operator.get_tempfile()
         tempfile = TmpFile(tempfile_path, packet.binary_data, seek=DataBlockHeader.HEADER_LEN)
         checksum = tempfile.checksum()
-        header = DataBlockHeader.pack(keys[0], replica_count, checksum, packet.session_id)
+        header = DataBlockHeader.pack(keys[0], replica_count, checksum, packet.user_id)
         tempfile.write(header, seek=0)
 
         for key in keys:

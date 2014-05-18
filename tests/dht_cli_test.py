@@ -19,6 +19,7 @@ from cli_test import *
 from fabnet.core.constants import ET_INFO, ET_ALERT
 from fabnet.core.fri_base import FabnetPacketResponse
 from fabnet_dht.constants import DS_NORMALWORK 
+from fabnet.core.key_storage import init_keystore
 
 os.environ['FABNET_PLUGINS_CONF'] = 'tests/plugins.yaml'
 

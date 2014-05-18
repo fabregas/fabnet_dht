@@ -65,7 +65,7 @@ class ClientGetOperation(OperationBase):
             else:
                 _, _, node_address = range_obj
                 resp = self._init_operation(node_address, 'GetDataBlock', {'key': key, 'is_replica': is_replica, \
-                        'user_id': packet.session_id}, sync=True)
+                        'user_id': packet.user_id}, sync=True)
                 if resp.ret_code == RC_PERMISSION_DENIED:
                     return FabnetPacketResponse(ret_code=RC_PERMISSION_DENIED, ret_message=resp.ret_message)
                 elif resp.ret_code:

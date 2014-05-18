@@ -40,7 +40,7 @@ class RepairDataBlocksOperation(OperationBase):
         finally:
             self._unlock()
 
-        if packet.is_muticast:
+        if packet.is_multicast:
             return packet
 
 

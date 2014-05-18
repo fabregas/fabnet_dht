@@ -32,7 +32,11 @@ class GetDataBlockOperation(OperationBase):
         """
         key = packet.parameters.get('key', None)
         is_replica = packet.parameters.get('is_replica', False)
-        r_user_id = packet.parameters.get('user_id', packet.session_id)
+        if packet.role == CLIENT_ROLE:
+            r_user_id = packet.user_id
+        else:
+            r_user_id = packet.parameters.get('user_id', None)
+
         if key is None:
             return FabnetPacketResponse(ret_code=RC_ERROR, ret_message='Key is not found in request packet!')
 
@@ -43,9 +47,9 @@ class GetDataBlockOperation(OperationBase):
 
         data = FileBasedChunks(path)
         header = data.read(DataBlockHeader.HEADER_LEN)
-        _, _, checksum, user_id, _ = DataBlockHeader.unpack(header)
-        if user_id and packet.role != NODE_ROLE:
-            if r_user_id != user_id:
+        _, _, checksum, user_id_hash, _ = DataBlockHeader.unpack(header)
+        if r_user_id:
+            if not DataBlockHeader.match(r_user_id, user_id_hash):
                 return FabnetPacketResponse(ret_code=RC_PERMISSION_DENIED, ret_message='permission denied')
 
         return FabnetPacketResponse(binary_data=data, ret_parameters={'checksum': checksum})

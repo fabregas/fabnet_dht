@@ -24,33 +24,38 @@ class DataBlockHeader:
     @classmethod
     def pack(cls, key, replica_count, checksum, user_id=None):
         if not user_id:
-            user_id = 0
-        if type(user_id) in (str, unicode):
-            #FIXME: logger.warning('User ID should be integer value for saving into block metadata')
-            user_id = 0
-
+            user_id = ''
+        user_id = str(user_id)
+        user_id_hash = hashlib.sha1(user_id).digest()
+        
         unixtime = time.mktime(datetime.utcnow().timetuple())
-
         try:
             header = struct.pack(STRUCT_FMT, DATA_BLOCK_LABEL, unixtime, key.decode('hex'), \
-                            replica_count, checksum.decode('hex'), ('%040x'%user_id).decode('hex'))
+                            replica_count, checksum.decode('hex'), user_id_hash)
         except Exception, err:
             raise Exception('Data block header packing failed! Details: %s'%err)
 
         return header
 
     @classmethod
+    def match(cls, user_id, user_hash):
+        if not user_id:
+            user_id = ''
+        user_id_hash = hashlib.sha1(str(user_id)).digest()
+        return user_id_hash == user_hash
+
+    @classmethod
     def unpack(cls, data):
         header = data[:cls.HEADER_LEN]
         try:
-            db_label, put_unixtime, primary_key, replica_count, checksum, user_id = struct.unpack(STRUCT_FMT, header)
+            db_label, put_unixtime, primary_key, replica_count, checksum, user_id_hash = struct.unpack(STRUCT_FMT, header)
         except Exception, err:
             raise Exception('Data block header is invalid! Details: %s'%err)
 
         if db_label != DATA_BLOCK_LABEL:
             raise Exception('Corrupted data block! No block label found')
 
-        return primary_key.encode('hex'), replica_count, checksum.encode('hex'), long(user_id.encode('hex'), 16), put_unixtime
+        return primary_key.encode('hex'), replica_count, checksum.encode('hex'), user_id_hash, put_unixtime
 
     @classmethod
     def check_raw_data(cls, binary_data, exp_checksum=None):
