@@ -24,7 +24,7 @@ from fabnet.core.key_storage import init_keystore
 os.environ['FABNET_PLUGINS_CONF'] = 'tests/plugins.yaml'
 
 class TestDHTMgmtCLI(TestMgmtCLI):
-    NODES = [('mgmt', 'test_node01'), ('dht', 'test_node02'), ('dht', 'test_node03'), ('dht', 'test_node04')]
+    NODES = [('mgmt', 'test_node00'), ('dht', 'test_node01'), ('dht', 'test_node02'), ('dht', 'test_node03')]
 
     def test08_nodesmgmt_conf_startstop(self):
         cli = pexpect.spawn('telnet 127.0.0.1 8022', timeout=2)
@@ -42,7 +42,7 @@ class TestDHTMgmtCLI(TestMgmtCLI):
             self._cmd('help start-nodes', 'startnodes')
             self._cmd('start-nodes unkn-node', 'Error! [50] Node "unkn-node" does not found!')
             self._cmd('start-nodes test_node01', ['Starting', 'Done'])
-            self._cmd('start-nodes test_node[00-01]', ['Node "test_node00" does not found!'])
+            self._cmd('start-nodes test_node[00-04]', ['Node "test_node04" does not found!'])
 
             def test_call(nodeaddr, method, params=None):
                 if method != 'NodeStatistic':
@@ -50,7 +50,7 @@ class TestDHTMgmtCLI(TestMgmtCLI):
                 return FabnetPacketResponse(ret_code=0, ret_parameters={'DHTInfo':{'status': DS_NORMALWORK}})
             BaseMgmtCLIHandler.mgmtManagementAPI.fri_call_node = test_call
 
-            self._cmd('start-nodes test_node[01-04]', ['Starting', 'Done', 'Waiting'], ['Error'])
+            self._cmd('start-nodes test_node[00-03]', ['Starting', 'Done', 'Waiting'], ['Error'])
         finally:
             cli.sendline('exit')
             cli.expect(pexpect.EOF)
@@ -114,7 +114,7 @@ class TestDHTMgmtCLI(TestMgmtCLI):
             self._cmd('help repair-dht-data', 'repair-data')
             self._cmd('repair-dht-data', 'Usage:')
             self._cmd('repair-dht-data --full', ['No one online node found'])
-            self._cmd('repair-dht-data test_node[01-04]', ['checking data blocks at test_node02', 'Error!'])
+            self._cmd('repair-dht-data test_node[00-03]', ['checking data blocks at test_node02', 'Error!'])
 
             self._cmd('help show-repair-info', 'shrepair')
             self._cmd('show-repair-info', ['NODE', 'FAILED REPAIR'],  ['test_node03'])
