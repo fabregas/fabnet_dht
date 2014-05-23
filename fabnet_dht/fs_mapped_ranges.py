@@ -1,29 +1,25 @@
 #!/usr/bin/python
 """
-Copyright (C) 2012 Konstantin Andrusenko
+Copyright (C) 2014 Konstantin Andrusenko
     See the documentation for further information on copyrights,
     or contact the author. All Rights Reserved.
 
 @package fabnet_dht.fs_mapped_ranges
 
 @author Konstantin Andrusenko
-@date September 15, 2012
+@date May 23, 2014
 """
 import os
+import fcntl
 import shutil
 import threading
-import hashlib
 import copy
+import json
 import time
-from datetime import datetime
+import errno
 
 from fabnet.utils.logger import oper_logger as logger
-from fabnet.utils.internal import total_seconds
-from fabnet.core.config import Config
-from fabnet.core.fri_base import FileBasedChunks
-
-from fabnet_dht.constants import MIN_HASH, MAX_HASH
-from fabnet_dht.data_block import DataBlockHeader
+from fabnet_dht.constants import MIN_KEY, MAX_KEY
 
 class FSHashRangesException(Exception):
     pass
@@ -43,318 +39,229 @@ class FSHashRangesPermissionDenied(FSHashRangesException):
 class FSHashRangesNoFreeSpace(FSHashRangesException):
     pass
 
+class DataBlock:
+    __TD_LOCKS = {}
+    __TD_LOCK = threading.Lock()
+    NEED_THRD_LOCK = False
 
-class TmpFile:
-    def __init__(self, f_path, data, seek=0):
-        self.__f_path = f_path
-        self.__checksum = hashlib.sha1()
-        self.__link_idx = 1
-
-        if type(data) not in (list, tuple):
-            data = [data]
-
+    @classmethod
+    def __try_thread_lock(cls, path, shared=False):
+        cls.__TD_LOCK.acquire()
         try:
-            fobj = open(self.__f_path, 'wb')
-        except IOError, err:
-            raise FSHashRangesException('Cant create tmp file. Details: %s'%err)
-
-        try:
-            if seek:
-                fobj.write('\x00'*seek)
-
-            for data_block in data:
-                if type(data_block) == str:
-                    self.__int_write(fobj, data_block)
-                else:
-                    while True:
-                        chunk = data_block.get_next_chunk()
-                        if chunk is None:
-                            break
-                        self.__int_write(fobj, chunk)
-        except IOError, err:
-            raise FSHashRangesException('Cant save tmp data to file system. Details: %s'%err)
-        except Exception, err:
-            raise err
-        finally:
-            fobj.close()
-
-    def hardlink(self):
-        link = '%s.%s' % (self.__f_path, self.__link_idx)
-        os.link(self.__f_path, link)
-        self.__link_idx += 1
-        return link
-
-    def __int_write(self, fobj, data):
-        self.__checksum.update(data)
-        fobj.write(data)
-
-    def __del__(self):
-        self.remove()
-
-    def checksum(self):
-        return self.__checksum.hexdigest()
-
-    def write(self, data, seek=None):
-        try:
-            fobj = open(self.__f_path, 'r+b')
-        except IOError, err:
-            raise FSHashRangesException('Cant create tmp file. Details: %s'%err)
-
-        try:
-            if seek is not None:
-                fobj.seek(seek, 0)
+            lock = cls.__TD_LOCKS.get(path, None)
+            cur_thrd_id = threading.current_thread().ident
+            if lock is None:
+                cls.__TD_LOCKS[path] = (cur_thrd_id, shared, 1)
+                return True
+            thrd_id, lock, cnt = lock
+            if shared:
+                if thrd_id == cur_thrd_id:
+                    return True
+                if lock == shared:
+                    cls.__TD_LOCKS[path] = (cur_thrd_id, shared, cnt+1)
+                    return True
             else:
-                fobj.seek(0, 2) #seek to EOF
-
-            self.__int_write(fobj, data)
+                if thrd_id == cur_thrd_id:
+                    cls.__TD_LOCKS[path] = (thrd_id, shared, 1)
+                    return True
+            return False
         finally:
-            fobj.close()
+            cls.__TD_LOCK.release()
+            
+    @classmethod
+    def __thread_lock(cls, path, shared=False):
+        while not cls.__try_thread_lock(path, shared):
+            time.sleep(0.01)
 
-    def file_path(self):
-        return self.__f_path
-
-    def chunks(self):
-        return FileBasedChunks(self.__f_path)
-
-    def remove(self):
-        if os.path.exists(self.__f_path):
-            os.unlink(self.__f_path)
-
-
-class SafeCounter:
-    def __init__(self):
-        self.__count = 0
-        self.__lock = threading.Lock()
-
-    def inc(self):
-        self.__lock.acquire()
+    @classmethod
+    def __thread_unlock(cls, path):
+        cls.__TD_LOCK.acquire()
         try:
-            self.__count += 1
+            lock = cls.__TD_LOCKS.get(path, None)
+            if lock is None:
+                return
+            cur_thrd_id = threading.current_thread().ident
+            thrd_id, lock, cnt = lock
+            if lock == True: #shared
+                cnt -= 1
+                if cnt == 0:
+                    del cls.__TD_LOCKS[path]
+                else:
+                    cls.__TD_LOCKS[path] = (thrd_id, lock, cnt)
+            else:
+                if cur_thrd_id != thrd_id:
+                    return
+                del cls.__TD_LOCKS[path]
         finally:
-            self.__lock.release()
+            cls.__TD_LOCK.release()
 
-    def dec(self):
-        self.__lock.acquire()
+    def __init__(self, path):
+        self.__path = path
+        self.__fd = None
+        self.__blocked = False
+
+    def __open(self):
+        self.__fd = os.open(self.__path, os.O_RDWR | os.O_CREAT)
+        fcntl.lockf(self.__fd, fcntl.LOCK_SH)
+        if self.NEED_THRD_LOCK:
+            self.__thread_lock(self.__path, shared=True)
+
+    def exists(self):
+        '''return True if data block file is already exists'''
+        return os.path.exists(self.__path)
+
+    def read(self, bytes_cnt=0, seek=0, iterate=False):
+        '''read bytes_cnt bytes of data from data block file
+        if bytes_cnt <= 0 - all data will be read
+        if seek > 0 - start read from seek position, else - from start of file
+        if iterate is True then return iterator over file that
+        will continuosly get portions of data at most bytes_cnt size until EOF
+        '''
+        if not self.__fd:
+            self.__open()
+
+        if seek:
+            os.lseek(self.__fd, seek, os.SEEK_SET)
+        else:
+            os.lseek(self.__fd, 0, os.SEEK_SET) #move to start
+
+        def iterator_func(bytes_cnt):
+            if bytes_cnt <= 0:
+                bytes_cnt = 1024
+
+            while True:
+                data = os.read(self.__fd, bytes_cnt)
+                if not data:
+                    return
+                yield data
+
+        if iterate:
+            return iterator_func(bytes_cnt)
+        else:
+            if bytes_cnt > 0:
+                return os.read(self.__fd, bytes_cnt)
+            else:
+                ret_data = ''
+                for data in iterator_func(bytes_cnt):
+                    ret_data += data
+                return ret_data
+
+    def write(self, buf, seek=0, iterate=False, truncate=False):
+        '''write buf string to data block file
+        If seek > 0 write process will be started from seek position,
+        else - write to end of data block
+        If iterate == True, buf will be used as iterator that continously get data
+        '''
+        self._block()
         try:
-            self.__count -= 1
-        finally:
-            self.__lock.release()
+            if truncate:
+                os.ftruncate(self.__fd, seek)
+            if seek:
+                os.lseek(self.__fd, seek, os.SEEK_SET)
+            else:
+                os.lseek(self.__fd, 0, os.SEEK_END) #move to end
 
-    def count(self):
-        self.__lock.acquire()
+            if iterate:
+                for data in buf:
+                    os.write(self.__fd, data)
+            else:
+                os.write(self.__fd, buf)
+
+            os.fsync(self.__fd)
+        finally:
+            self._unblock()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, trace):
+        self.close()
+
+    def _block(self):
+        '''open data block file (if not opened), lock file with exclusive lock
+        and keep file opened'''
+        if not self.__fd:
+            self.__open()
+
+        if self.__blocked:
+            return
+        if self.NEED_THRD_LOCK:
+            self.__thread_lock(self.__path, shared=False)
+        fcntl.lockf(self.__fd, fcntl.LOCK_EX)
+
+    def _unblock(self):
+        '''unlock and file descriptor'''
+        if self.__blocked:
+            if self.NEED_THRD_LOCK:
+                self.__thread_unlock(self.__path)
+            fcntl.lockf(self.__fd, fcntl.LOCK_UN)
+            self.__blocked = False
+
+    def close(self):
+        '''close file descriptor is opened'''
+        if self.NEED_THRD_LOCK:
+            self.__thread_unlock(self.__path)
+        if self.__fd:
+            os.close(self.__fd)
+            self.__fd = None
+
+
+class ThreadSafedDataBlock(DataBlock):
+    NEED_THRD_LOCK = True
+
+class FSMappedDHTRange:
+    #data blocks content type
+    DBCT_MASTER = 'mdb'
+    DBCT_REPLICA = 'rdb'
+    DBCT_MD_MASTER = 'mmd'
+    DBCT_MD_REPLICA = 'rmd'
+    DBCT_TEMP = 'tmp'
+
+    __DBCT_LIST = (DBCT_MASTER, DBCT_REPLICA, DBCT_MD_MASTER, DBCT_MD_REPLICA, DBCT_TEMP)
+    __RANGE_INFO_FN = 'range_info'
+
+    @classmethod 
+    def discovery_range(cls, range_path):
+        '''try to find range_info file and read previous saved range scope'''
+        range_info_path = os.path.join(range_path, cls.__RANGE_INFO_FN)
+        if not os.path.exists(range_info_path):
+            return FSMappedDHTRange(MIN_KEY, MAX_KEY, range_path)
+
         try:
-            return self.__count
-        finally:
-            self.__lock.release()
+            raw_data = open(range_info_path).read()
+            data = json.loads(raw_data)
+            range_start = data.get('range_start', MIN_KEY)
+            range_end = data.get('range_end', MAX_KEY)
+        except Exception, err:
+            logger.error('Invalid range_info file: %s'%err)
 
-class SafeList:
-    def __init__(self):
-        self.__list = []
-        self.__lock = threading.Lock()
+        return FSMappedDHTRange(range_start, range_end, range_path)
 
-    def append(self, value):
-        self.__lock.acquire()
-        try:
-            self.__list.append(value)
-        finally:
-            self.__lock.release()
+    def __init__(self, start, end, range_path):
+        if not os.path.exists(range_path):
+            raise FSHashRangesException('Path %s does not found!'%range_path) 
 
-    def get(self, num):
-        self.__lock.acquire()
-        try:
-            return self.__list[num]
-        finally:
-            self.__lock.release()
-
-    def concat(self, app_list):
-        self.__lock.acquire()
-        try:
-            self.__list += app_list
-        finally:
-            self.__lock.release()
-
-    def copy(self):
-        self.__lock.acquire()
-        try:
-            return copy.copy(self.__list)
-        finally:
-            self.__lock.release()
-
-    def size(self):
-        self.__lock.acquire()
-        try:
-            return len(self.__list)
-        finally:
-            self.__lock.release()
-
-    def clear(self):
-        self.__lock.acquire()
-        try:
-            for_ret = self.__list
-            self.__list = []
-
-            return for_ret
-        finally:
-            self.__lock.release()
-
-
-class FSHashRanges:
-    @staticmethod
-    def discovery_range(save_path, ret_full=False):
-        items = os.listdir(save_path)
-
-        discovered_ranges = []
-        max_range = None
-        for item in items:
-            parts = item.split('_')
-            if len(parts) != 2:
-                continue
-
-            try:
-                start_key = long(parts[0], 16)
-            except ValueError:
-                continue
-
-            try:
-                end_key = long(parts[1], 16)
-            except ValueError:
-                continue
-
-            hash_range = FSHashRanges(start_key, end_key, save_path)
-            if not max_range:
-                max_range = hash_range
-            elif hash_range.length() > max_range.length():
-                max_range = hash_range
-
-            discovered_ranges.append(hash_range)
-
-        for h_range in discovered_ranges:
-            if not ret_full and h_range == max_range:
-                continue
-            h_range.move_to_reservation()
-
-        if ret_full or (not max_range):
-            max_range = FSHashRanges(MIN_HASH, MAX_HASH, save_path)
-
-        if max_range:
-            max_range.restore_from_reservation()
-
-        return max_range
-
-
-    def __init__(self, start, end, save_path):
         self.__start = self._long_key(start)
         self.__end = self._long_key(end)
-        self.__save_path = save_path
+        self.__range_path = range_path
+        self.__range_info = DataBlock(os.path.join(range_path, 'range_info'))
 
-        dir_name = '%040x_%040x' % (self.__start, self.__end)
-        self.__range_dir = os.path.join(save_path, dir_name)
-        if not os.path.exists(self.__range_dir):
-            try:
-                os.mkdir(self.__range_dir)
-            except OSError, err:
-                raise FSHashRangesException('Cant create directory for range: %s (%s)'%(self.__range_dir, err))
+        self.__dirs_map = {}
+        for dbct in self.__DBCT_LIST:
+            dir_path = os.path.join(range_path, dbct)
+            if not os.path.exists(dir_path):
+                try:
+                    os.mkdir(dir_path)
+                except OSError, err:
+                    raise FSHashRangesException('Unable to create directory %s: (%s)'%(dir_path, err))
+            self.__dirs_map[dbct] = dir_path + '/'
+            
+        self.__mgmt_lock = threading.Lock()
+        self.__child_ranges = []
 
-        self.__reservation_dir = os.path.join(save_path, 'reservation_range')
-        if not os.path.exists(self.__reservation_dir):
-            try:
-                os.mkdir(self.__reservation_dir)
-            except OSError, err:
-                raise FSHashRangesException('Cant create directory for range: %s (%s)'%(self.__reservation_dir, err))
-
-        self.__replica_dir = os.path.join(save_path, 'replica_data')
-        if not os.path.exists(self.__replica_dir):
-            os.mkdir(self.__replica_dir)
-
-        self.__tmp_dir = os.path.join(save_path, 'tmp')
-        if not os.path.exists(self.__tmp_dir):
-            os.mkdir(self.__tmp_dir)
-
-        self.__last_range_file = os.path.join(save_path, '.last_range')
-
-        self.__child_ranges = SafeList()
-        self.__parallel_writes = SafeCounter()
-        self.__block_flag = threading.Event()
         self.__no_free_space_flag = threading.Event()
-        self.__move_lock = threading.Lock()
-        self.__ret_range_i = None
+        self.__free_for_unlock = 0
 
-    def save_range(self):
-        open(self.__last_range_file, 'w').write('%i %i'%(self.__start, self.__end))
-
-    def get_last_range(self):
-        if not os.path.exists(self.__last_range_file):
-            return None
-        data = open(self.__last_range_file).read()
-        start, end = data.split()
-        return int(start), int(end)
-
-
-    def mktemp(self, binary_data):
-        if not binary_data:
-            return None
-
-        tmp_file = self.tempfile()
-        return TmpFile(tmp_file, binary_data)
-
-    def tempfile(self):
-        if self.__no_free_space_flag.is_set():
-            if self.get_free_size_percents() > float(Config.CRITICAL_FREE_SPACE_PERCENT):
-                self.__no_free_space_flag.clear()
-                logger.info('Range is unlocked for write...')
-            else:
-                raise FSHashRangesNoFreeSpace('No free space for saving data block')
-
-        return  os.path.join(self.__tmp_dir, hashlib.sha1(datetime.utcnow().isoformat()).hexdigest())
-
-    def block_for_write(self):
-        self.__no_free_space_flag.set()
-
-    def get_start(self):
-        return self.__start
-
-    def get_end(self):
-        return self.__end
-
-    def length(self):
-        return self.__end - self.__start
-
-    def is_max_range(self):
-        if self.__start == MIN_HASH and self.__end == MAX_HASH:
-            return True
-        return False
-
-    def get_range_dir(self):
-        return self.__range_dir
-
-    def get_replicas_dir(self):
-        return self.__replica_dir
-
-    def is_equal(self, another_range):
-        if self.__start == another_range.get_start() and \
-            self.__end == another_range.get_end():
-            return True
-        return False
-
-    def _in_range(self, key):
-        if self.__start <= self._long_key(key) <= self.__end:
-            return True
-        return False
-
-    def _move_from(self, file_path, rewrite=True):
-        dest = os.path.join(self.__range_dir, os.path.basename(file_path))
-        if os.path.exists(dest):
-            if not rewrite:
-                os.remove(file_path)
-                return
-            os.remove(dest)
-
-        shutil.move(file_path, self.__range_dir)
-
-    def _wait_write_buffers(self):
-        while self.__parallel_writes.count():
-            logger.info('Waiting swapping buffers to disk...')
-            time.sleep(1)
 
     def _long_key(self, key):
         if type(key) == int:
@@ -369,374 +276,158 @@ class FSHashRanges:
             return '%040x'%key
         return key
 
-    def __check_ex_data_block(self, old_f_name, new_f_name):
-        if os.path.exists(old_f_name):
-            logger.debug('Checking data block datetime at %s...'%old_f_name)
-            f_obj = open(old_f_name, 'rb')
-            try:
-                stored_header = f_obj.read(DataBlockHeader.HEADER_LEN)
-            finally:
-                f_obj.close()
+    def _in_range(self, key):
+        return self.__start <= key <= self.__end
 
-            f_obj = open(new_f_name, 'rb')
-            try:
-                new_header = f_obj.read(DataBlockHeader.HEADER_LEN)
-            finally:
-                f_obj.close()
-
-            try:
-                _, _, _, user_id, stored_dt = DataBlockHeader.unpack(stored_header)
-            except Exception, err:
-                logger.error('Bad local data block header. %s'%err)
-                return #we can store newer data block
-
-            _, _, _, new_user_id, new_dt = DataBlockHeader.unpack(new_header)
-
-            if new_dt < stored_dt:
-                raise FSHashRangesOldDataDetected('Data block is already saved with newer datetime')
-            if new_user_id != user_id:
-                raise FSHashRangesPermissionDenied('Alien data block')
-
-
-    def __put_data(self, key, tmp_file_path, save_to_reservation=False, save_to_replicas=False, check_dt=False):
-        key = self._str_key(key)
-        need_lock = False
-
-        if save_to_replicas:
-            range_dir = self.__replica_dir
-        elif self.__block_flag.is_set():
-            range_dir = self.__reservation_dir
-        else:
-            if save_to_reservation:
-                range_dir = self.__reservation_dir
-            else:
-                range_dir = self.__range_dir
-                need_lock = True
-
-        dest = os.path.join(range_dir, key)
-        if check_dt:
-            self.__check_ex_data_block(dest, tmp_file_path)
-
-        if need_lock:
-            self.__parallel_writes.inc()
-
+    def save_range(self):
+        '''write range scope to range_info file.
+        current range scope (if found) should be saved too as old_range
+        '''
         try:
-            shutil.move(tmp_file_path, dest)
+            old_range_start, old_range_end = self.__get_saved_range('range_start', 'range_end')
+            if old_range_start == self.__start and old_range_end == self.__end:
+                return
+
+            range_info = json.dumps({'range_start': self.__start,
+                        'range_end': self.__end,
+                        'old_range_start': old_range_start,
+                        'old_range_end': old_range_end})
+
+            self.__range_info.write(range_info, truncate=True)
         finally:
-            if need_lock:
-                self.__parallel_writes.dec()
+            self.__range_info.close()
 
-    def __get_data_path(self, key, is_replica=False):
-        key = self._str_key(key)
-        if is_replica:
-            f_name = os.path.join(self.__replica_dir, key)
-            if not os.path.exists(f_name):
-                raise FSHashRangesNoData('No replica data found for key %s'% key)
-            return f_name
+    def get_last_range(self):
+        return self.__get_saved_range('old_range_start', 'old_range_end')
 
-        file_path = os.path.join(self.__range_dir, key)
-        if not os.path.exists(file_path):
-            #check reservation range
-            file_path = os.path.join(self.__reservation_dir, key)
-            if not os.path.exists(file_path):
-                raise FSHashRangesNoData('No data found for key %s'% key)
-
-        return file_path
-
-    def __join_data(self, child_ranges):
-        for child_range in child_ranges:
-            child_range_dir = child_range.get_range_dir()
-            if not os.path.exists(child_range_dir):
-                continue
-            files = os.listdir(child_range_dir)
-            perc_part = len(files)/10
-
-            logger.info('Joining range %s...'%self.__pretty_dir(child_range_dir))
-
-            for cnt, digest in enumerate(files):
-                if perc_part and (cnt+1) % perc_part == 0:
-                    perc = (cnt+1)/perc_part
-                    if perc <= 10:
-                        logger.info('Joining range progress: %i'%perc + '0%...')
-
-                self._move_from(os.path.join(child_range_dir, digest))
-
-            logger.info('Range is joined!')
-
-    def __pretty_dir(self, path):
-        parts = os.path.basename(path).split('_')
-        if len(parts) != 2:
-            return path
-        return os.path.join(os.path.dirname(path), '_'.join(map(lambda p: p[:4]+'*', parts)))
-
-    def __split_data(self):
-        files = os.listdir(self.__range_dir)
-        perc_part = len(files)/10
-
-        logger.info('Splitting hash range...')
-
-        for cnt, digest in enumerate(files):
-            if perc_part and (cnt+1) % perc_part == 0:
-                perc = (cnt+1)/perc_part
-                if perc <= 10:
-                    logger.info('Splitting range progress: %i'%perc + '0%...')
-
-            for child_range in self.__child_ranges.copy():
-                if child_range._in_range(digest):
-                    child_range._move_from(os.path.join(self.__range_dir, digest))
-                    break
-
-        logger.info('Range is splitted!')
-
-
-    def _destroy(self, force=False):
-        if not os.path.exists(self.__range_dir):
-            return
-
-        try:
-            if force:
-                shutil.rmtree(self.__range_dir)
-            else:
-                os.rmdir(self.__range_dir)
-        except OSError, err:
-            raise FSHashRangesException('Cant destroy ranges directory. Details: %s'%err)
-
-
-    def _block_range(self):
-        self.__block_flag.set()
-
-    def _unblock_range(self):
-        self.__block_flag.clear()
-
-
-
-    def put(self, key, tmp_file_path, is_replica=False, check_dt=False):
-        if is_replica:
-            self.__put_data(key, tmp_file_path, save_to_replicas=True, check_dt=check_dt)
-            return
-
-        if self.__child_ranges.size():
-            for child_range in self.__child_ranges.copy():
-                if not child_range._in_range(key):
-                    continue
-                return child_range.put(key, tmp_file_path, check_dt)
-
-        if self._in_range(key):
-            self.__put_data(key, tmp_file_path, check_dt=check_dt)
-        else:
-            self.__put_data(key, tmp_file_path, save_to_reservation=True, check_dt=check_dt)
-
-
-    def get_path(self, key, is_replica=False):
-        if is_replica:
-            return self.__get_data_path(key, is_replica)
-
-        if self.__child_ranges.size():
-            for child_range in self.__child_ranges.copy():
-                if not child_range._in_range(key):
-                    continue
-                try:
-                    return child_range.get_path(key)
-                except FSHashRangesNoData, err:
-                    break
-
-        return self.__get_data_path(key)
-
-    def get(self, key, is_replica=False):
-        '''WARNING: This method can fail when runned across split/join pocess'''
-        file_path = self.get_path(key, is_replica)
-        return FileBasedChunks(file_path)
-
-    def delete_data_block(self, key, is_replica, r_user_id, carefully_delete):
-        file_path = self.get_path(key, is_replica)
-
-        if carefully_delete:
-            data = FileBasedChunks(file_path)
-            header = data.read(DataBlockHeader.HEADER_LEN)
-            _, _, checksum, user_id_hash, _ = DataBlockHeader.unpack(header)
-
-            if not DataBlockHeader.match(r_user_id, user_id_hash):
-                raise FSHashRangesPermissionDenied('Can not delete alien data block!')
-        
-        os.remove(file_path)
-
-    def extend(self, start_key, end_key):
-        self.__move_lock.acquire()
-        try:
-            start = self.__start
-            end = self.__end
-            start_key = self._long_key(start_key)
-            end_key = self._long_key(end_key)
-            if start_key >= end_key:
-                raise FSHashRangesException('Bad subrange [%040x-%040x] of [%040x-%040x]'%\
-                                            (start_key, end_key, self.__start, self.__end))
-
-            if self.__start == end_key+1:
-                start = start_key
-            elif self.__end == start_key-1:
-                end = end_key
-            else:
-                raise FSHashRangesException('Bad range for extend [%040x-%040x] of [%040x-%040x]'%\
-                                            (start_key, end_key, self.__start, self.__end))
-
-            self._block_range()
-            self._wait_write_buffers()
-            h_range = FSHashRanges(start, end, self.__save_path)
+    def __get_saved_range(self, start_f_name, end_f_name):
+        raw_data = self.__range_info.read()
+        self.__range_info.close()
+        old_data = {}
+        if raw_data:
             try:
-                self.move_to_reservation()
+                old_data = json.loads(raw_data)
             except Exception, err:
-                self.restore_from_reservation()
-                self._unblock_range()
-                raise err
+                logger.warning('__update_range_info: range_info file corrupted!')
+        range_start = old_data.get(start_f_name, MIN_KEY)
+        range_end = old_data.get(end_f_name, MAX_KEY)
+        return long(range_start), long(range_end)
 
-            h_range.restore_from_reservation()
-        finally:
-            self.__move_lock.release()
 
-        return h_range
+    def get_start(self):
+        return self.__start
 
+    def get_end(self):
+        return self.__end
+
+    def length(self):
+        return 1 + self.__end - self.__start
+
+    def is_max_range(self):
+        return self.__start == MIN_KEY and self.__end == MAX_KEY
 
     def split_range(self, start_key, end_key):
-        self.__move_lock.acquire()
+        start_key = self._long_key(start_key)
+        end_key = self._long_key(end_key)
+        if start_key == self.__start:
+            split_key = end_key
+            ret_range_i = 0
+            first_subrange_end = split_key
+            second_subrange_start = split_key + 1
+        elif end_key == self.__end:
+            split_key = start_key
+            ret_range_i = 1
+            first_subrange_end = split_key - 1
+            second_subrange_start = split_key
+        else:
+            raise FSHashRangesException('Bad subrange [%040x-%040x] for range [%040x-%040x]'%\
+                                            (start_key, end_key, self.__start, self.__end))
+
+        if not self._in_range(split_key):
+            FSHashRangesNotFound('No key %040x found in range'%split_key)
+
+        first_rg = FSMappedDHTRange(self.__start, first_subrange_end, self.__range_path)
+        second_rg = FSMappedDHTRange(second_subrange_start, self.__end, self.__range_path)
+        ranges = [first_rg, second_rg]
+
+        self.__mgmt_lock.acquire()
         try:
-            start_key = self._long_key(start_key)
-            end_key = self._long_key(end_key)
-            if start_key == self.__start:
-                split_key = end_key
-                self.__ret_range_i = 0
-                first_subrange_end = split_key
-                second_subrange_start = split_key + 1
-            elif end_key == self.__end:
-                split_key = start_key
-                self.__ret_range_i = 1
-                first_subrange_end = split_key - 1
-                second_subrange_start = split_key
-            else:
-                raise FSHashRangesException('Bad subrange [%040x-%040x] for range [%040x-%040x]'%\
-                                                (start_key, end_key, self.__start, self.__end))
-
-            if not self._in_range(split_key):
-                FSHashRangesNotFound('No key %040x found in range'%split_key)
-
-            first_rg = FSHashRanges(self.__start, first_subrange_end, self.__save_path)
-            second_rg = FSHashRanges(second_subrange_start, self.__end, self.__save_path)
-
-            self.__child_ranges.concat([first_rg, second_rg])
-
-            self._wait_write_buffers()
-
-            self.__split_data()
+            if self.__child_ranges:
+                raise FSHashRangesException('Range is already splited!')
+            self.__child_ranges = (ranges[ret_range_i], ranges[int(not ret_range_i)])
         finally:
-            self.__move_lock.release()
+            self.__mgmt_lock.release()
 
         return self.get_subranges()
 
-
-    def iter_range(self):
-        self._block_range()
-        self._wait_write_buffers()
-        try:
-            files = os.listdir(self.__range_dir)
-            for digest in files:
-                yield digest, self.get(digest)
-        except Exception, err:
-            self._unblock_range()
-            raise err
-
-    def _ensure_not_write(self, file_path):
-        f_dm = datetime.fromtimestamp(os.path.getmtime(file_path))
-        if total_seconds(datetime.now() - f_dm) > float(Config.WAIT_FILE_MD_TIMEDELTA):
-            return True
-        return False
-
-    def __iter_data_blocks(self, proc_dir, foreign_only=False):
-        self.__move_lock.acquire()
-        try:
-            files = os.listdir(proc_dir)
-            for digest in files:
-                if foreign_only and self._in_range(digest):
-                    continue
-                file_path = os.path.join(proc_dir, digest)
-                if self._ensure_not_write(file_path):
-                    yield digest, FileBasedChunks(file_path), file_path
-        finally:
-            self.__move_lock.release()
-
-    def iter_reservation(self):
-        return self.__iter_data_blocks(self.__reservation_dir)
-
-    def iter_replicas(self, foreign_only=True):
-        return self.__iter_data_blocks(self.__replica_dir, foreign_only)
-
-    def iter_data_blocks(self):
-        return self.__iter_data_blocks(self.__range_dir)
-
     def join_subranges(self):
-        self.__move_lock.acquire()
+        self.__mgmt_lock.acquire()
         try:
-            child_ranges = self.__child_ranges.copy()
-            if not child_ranges:
-                return
-
-            for child_range in child_ranges:
-                child_range._block_range()
-
-            for child_range in child_ranges:
-                child_range._wait_write_buffers()
-
-            self.__join_data(child_ranges)
-
-            for child_range in child_ranges:
-                child_range._destroy()
-
-            self.__child_ranges.clear()
-
-            self.__ret_range_i = None
+            self.__child_ranges = []
         finally:
-            self.__move_lock.release()
-
+            self.__mgmt_lock.release()
 
     def get_subranges(self):
-        if self.__child_ranges.size():
-            ranges = self.__child_ranges.copy()
-            return ranges[self.__ret_range_i], ranges[int(not self.__ret_range_i)]
+        self.__mgmt_lock.acquire()
+        try:
+            if self.__child_ranges:
+                return copy.copy(self.__child_ranges)
+            return None
+        finally:
+            self.__mgmt_lock.release()
 
-        return None
+    def extend(self, start_key, end_key):
+        start_key = self._long_key(start_key)
+        end_key = self._long_key(end_key)
+        if start_key >= end_key:
+            raise FSHashRangesException('Bad subrange [%040x-%040x] of [%040x-%040x]'%\
+                                        (start_key, end_key, self.__start, self.__end))
 
-    def move_to_reservation(self):
-        if not os.path.exists(self.__range_dir):
-            return
+        start = self.__start
+        end = self.__end
+        if self.__start == end_key+1:
+            start = start_key
+        elif self.__end == start_key-1:
+            end = end_key
+        else:
+            raise FSHashRangesException('Bad range for extend [%040x-%040x] of [%040x-%040x]'%\
+                                        (start_key, end_key, self.__start, self.__end))
 
-        self._block_range()
-        self._wait_write_buffers()
-        files = os.listdir(self.__range_dir)
-        for digest in files:
-            file_path = os.path.join(self.__range_dir, digest)
-            dest = os.path.join(self.__reservation_dir, digest)
-            if os.path.exists(dest):
-                os.remove(dest)
+        h_range = FSMappedDHTRange(start, end, self.__range_path)
+        h_range.save_range()
+        return h_range
 
-            shutil.move(file_path, dest)
+    def iterator(self, db_content_type, foreign_only=False, all_data=False):
+        '''iterator over data blocks
+        - db_content_type should be one of DBCT_* constants
+        - if foreign_only is False then data blocks in range [range_start, range_end]
+          will be iterated. Else - only data blocks NOT in range [range_start, range_end]
+        - if all_data is True - iterate all data blocks with requested content type
+          foreign_only parameter will be ignored in this case
 
-        self._destroy()
+        yield (<data block key>, <data block full path>)
+        '''
+        try:
+            f_path = self.__dirs_map.get(db_content_type, None)
+            if f_path is None:
+                raise FSHashRangesException('Unknown data block content type "%s"'%db_content_type)
 
-    def restore_from_reservation(self):
-        files = os.listdir(self.__reservation_dir)
-        perc_part = len(files)/10
+            files = os.listdir(f_path) #FIXME: this is really sucks for huge count of files
+            for db_key in files:
+                if not all_data:
+                    try:
+                        in_range = self.__start <= long(db_key, 16) <= self.__end
+                        if foreign_only and in_range:
+                            continue
+                        if (not foreign_only) and (not in_range):
+                            continue
+                    except ValueError:
+                        logger.warning('invalid data block name "%s"'%db_key)
+                        continue
 
-        logger.info('Restoring reservation data...')
-
-        for cnt, digest in enumerate(files):
-            if perc_part and (cnt+1) % perc_part == 0:
-                perc = (cnt+1)/perc_part
-                if perc <= 10:
-                    logger.info('Restore progress: %i'%perc + '0%...')
-
-            r_file_path = os.path.join(self.__reservation_dir, digest)
-            if self._in_range(digest) and self._ensure_not_write(r_file_path):
-                self._move_from(r_file_path, rewrite=False)
-
-        logger.info('Data is restored from reservation!')
+                yield db_key, f_path + db_key
+        except Exception, err:
+            raise FSHashRangesException('Iterator over data blocks failed with error: %s'%err)
 
     def __get_file_size(self, file_path):
         try:
@@ -749,33 +440,71 @@ class FSHashRanges:
             rest = stat.st_blksize - rest
         return stat.st_size + rest
 
-    def get_range_size(self):
-        return sum([self.__get_file_size(os.path.join(self.__range_dir, f)) for f in os.listdir(self.__range_dir)])
-
-    def get_replicas_size(self):
-        return sum([self.__get_file_size(os.path.join(self.__replica_dir, f)) for f in os.listdir(self.__replica_dir)])
-
-    def get_all_related_data_size(self):
-        range_size = self.get_range_size()
-        replica_size = 0
-        for digest in os.listdir(self.__replica_dir):
-            if self._in_range(digest):
-                replica_size += self.__get_file_size(os.path.join(self.__replica_dir, digest))
-
-        return replica_size + range_size
-
     def get_free_size(self):
-        stat = os.statvfs(self.__range_dir)
-        free_space = stat.f_bsize * stat.f_bavail
+        stat = os.statvfs(self.__range_path)
+        free_space = stat.f_frsize * stat.f_bavail
         return free_space
 
     def get_free_size_percents(self):
-        stat = os.statvfs(self.__range_dir)
+        stat = os.statvfs(self.__range_path)
         return (stat.f_bavail * 100.) / stat.f_blocks
 
     def get_estimated_data_percents(self, add_size=0):
-        estimated_data_size = self.get_range_size() + self.get_replicas_size() + add_size
-        stat = os.statvfs(self.__range_dir)
-        estimated_data_size_perc = (estimated_data_size * 100.) / (stat.f_blocks * stat.f_bsize)
+        stat = os.statvfs(self.__range_path)
+        total = stat.f_blocks * stat.f_frsize 
+        free = stat.f_bfree * stat.f_frsize
+        used = total - free
+        estimated_data_size_perc = (used + add_size) * 100. / total
         return estimated_data_size_perc
+
+    def get_data_size(self, db_content_type=None, only_in_range=True):
+        '''calculate data blocks size with content type db_content_type
+        If db_content_type is None - return size of all stored data blocks
+        '''
+        if db_content_type is None:
+            ct_list = self.__DBCT_LIST
+        else:
+            ct_list = [db_content_type]
+
+        size = 0
+        for dbct in ct_list:
+            for key, path in self.iterator(dbct, all_data=(not only_in_range)):
+                size += self.__get_file_size(path)
+        return size
+
+    def get_db_path(self, key, db_content_type, for_write=True):
+        '''get absolute path to data block by key and content type'''
+        if for_write and self.__no_free_space_flag.is_set():
+            if self.get_free_size_percents() > self.__free_for_unlock:
+                self.__no_free_space_flag.clear()
+                logger.info('Range is unlocked for write...')
+            else:
+                raise FSHashRangesNoFreeSpace('No free space for saving data block')
+
+        f_path = self.__dirs_map.get(db_content_type, None)
+        if f_path is None:
+            raise FSHashRangesException('Unknown data block content type "%s"'%db_content_type)
+
+        return f_path + key
+
+    def block_for_write(self, free_for_unlock):
+        if self.__no_free_space_flag.is_set():
+            return
+        self.__free_for_unlock = free_for_unlock
+        self.__no_free_space_flag.set()
+
+    def remove_db(self, key, db_content_type):
+        '''remove data block'''
+        f_path = self.__dirs_map.get(db_content_type, None)
+        if f_path is None:
+            raise FSHashRangesException('Unknown data block content type "%s"'%db_content_type)
+
+        db_path = f_path + key
+        try:
+            os.remove(db_path)
+        except OSError, err:
+            if err.errno == errno.ENOENT:
+                #no such file
+                return
+            raise err 
 

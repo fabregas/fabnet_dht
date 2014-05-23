@@ -24,7 +24,7 @@ from fabnet.core.constants import RC_OK, NT_SUPERIOR, NT_UPPER, ET_ALERT
 
 from fabnet_dht.repair_process import RepairProcess
 from fabnet_dht.constants import DS_INITIALIZE, DS_DESTROYING, DS_NORMALWORK, \
-            DEFAULT_DHT_CONFIG, MIN_HASH, MAX_HASH, RC_OLD_DATA, RC_NO_FREE_SPACE, DS_PREINIT
+            DEFAULT_DHT_CONFIG, MIN_KEY, MAX_KEY, RC_OLD_DATA, RC_NO_FREE_SPACE, DS_PREINIT
 from fabnet_dht.fs_mapped_ranges import FSHashRanges
 from fabnet_dht.operations.mgmt.get_range_data_request import GetRangeDataRequestOperation
 from fabnet_dht.operations.mgmt.get_ranges_table import GetRangesTableOperation
@@ -328,14 +328,14 @@ class DHTOperator(Operator):
         try:
             self_dht_range = self.get_dht_range()
 
-            if self_dht_range.get_end() != MAX_HASH:
+            if self_dht_range.get_end() != MAX_KEY:
                 next_range = self.ranges_table.find(self_dht_range.get_end()+1)
                 if not next_range:
                     next_exists_range = self.ranges_table.find_next(self_dht_range.get_end()-1)
                     if next_exists_range:
                         end = next_exists_range.start-1
                     else:
-                        end = MAX_HASH
+                        end = MAX_KEY
                     new_dht_range = self_dht_range.extend(self_dht_range.get_end()+1, end)
                     self.update_dht_range(new_dht_range)
 
@@ -349,13 +349,13 @@ class DHTOperator(Operator):
                     self.call_network(req)
                     return
 
-            first_range = self.ranges_table.find(MIN_HASH)
+            first_range = self.ranges_table.find(MIN_KEY)
             if not first_range:
                 first_range = self.ranges_table.get_first()
                 if not first_range:
                     return
                 if first_range.node_address == self.self_address:
-                    new_dht_range = self_dht_range.extend(MIN_HASH, first_range.start-1)
+                    new_dht_range = self_dht_range.extend(MIN_KEY, first_range.start-1)
                     self.update_dht_range(new_dht_range)
                     rm_lst = [(self_dht_range.get_start(), self_dht_range.get_end(), self.self_address)]
                     append_lst = [(new_dht_range.get_start(), new_dht_range.get_end(), self.self_address)]
@@ -591,7 +591,7 @@ class MonitorDHTRanges(threading.Thread):
         if percents >= float(Config.MAX_USED_SIZE_PERCENTS):
             if free_percents < float(Config.CRITICAL_FREE_SPACE_PERCENT):
                 logger.warning('Critical free disk space! Blocking range for write!')
-                dht_range.block_for_write()
+                dht_range.block_for_write(float(Config.CRITICAL_FREE_SPACE_PERCENT))
 
             logger.warning('Few free size for data range. Trying pull part of range to network')
 
@@ -622,11 +622,11 @@ class MonitorDHTRanges(threading.Thread):
 
         self.__last_is_start_part = not self.__last_is_start_part
 
-        if dest_key < MIN_HASH:
+        if dest_key < MIN_KEY:
             logger.info('[_pull_subrange] no range at left...')
             return False
 
-        if dest_key > MAX_HASH:
+        if dest_key > MAX_KEY:
             logger.info('[_pull_subrange] no range at right...')
             return False
 
