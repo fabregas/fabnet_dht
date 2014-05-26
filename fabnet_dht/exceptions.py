@@ -3,7 +3,10 @@
 class FSHashRangesException(Exception):
     PREFIX = 'FSHashRange'
     def __init__(self, err):
-        super(FSHashRangesException, self).__init__('[%s] %s'%(self.PREFIX, err))
+        prefix = '[%s] '%self.PREFIX
+        if not err.startswith(prefix):
+            err = prefix + err
+        super(FSHashRangesException, self).__init__(err)
 
 class FSHashRangesNotFound(FSHashRangesException):
     PREFIX = 'FSHashRangeNotFound'

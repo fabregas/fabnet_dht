@@ -49,8 +49,8 @@ class GetDataBlockOperation(OperationBase):
                 raise FSHashRangesNoData('No data found!')
 
             raw = db.get_next_chunk(DataBlockHeader.HEADER_LEN)
+            header = DataBlockHeader.unpack(raw)
             if user_id_hash:
-                header = DataBlockHeader.unpack(raw)
                 header.match(user_id_hash=user_id_hash)
 
             return FabnetPacketResponse(binary_data=db, ret_parameters={'checksum': header.checksum})

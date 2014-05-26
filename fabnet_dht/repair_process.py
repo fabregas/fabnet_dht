@@ -92,7 +92,7 @@ class RepairProcess:
 
             if dbct == FSMappedDHTRange.DBCT_REPLICA and self._in_check_range(data_keys[0]):
                 self.__check_data_block(key, db, dbct,  data_keys[0], \
-                        header.checksum, header.user_id_hash, FSMappedDHTRange.DBCT_MASTER)
+                        header, FSMappedDHTRange.DBCT_MASTER)
 
             for repl_key in data_keys[1:]:
                 if repl_key == key:
@@ -100,7 +100,7 @@ class RepairProcess:
 
                 if self._in_check_range(repl_key):
                     self.__check_data_block(key, db, dbct, repl_key, \
-                            header.checksum, header.user_id_hash, FSMappedDHTRange.DBCT_REPLICA)
+                            header, FSMappedDHTRange.DBCT_REPLICA)
 
     def __validate_key(self, key):
         try:
@@ -110,27 +110,28 @@ class RepairProcess:
         except Exception:
             return None
 
-    def __check_data_block(self, local_key, db, dbct, check_key, checksum, user_id_hash, remote_dbct):
+    def __check_data_block(self, local_key, db, dbct, check_key, header, remote_dbct):
         long_key = self.__validate_key(check_key)
         if long_key is None:
             logger.error('[RepairDataBlocks] Invalid data key "%s"'%key)
             self.__invalid_local_blocks += 1
 
         range_obj = self.operator.ranges_table.find(long_key)
-        params = {'key': check_key, 'checksum': checksum, 'dbct': remote_dbct}
+        params = {'key': check_key, 'checksum': header.checksum, 'dbct': remote_dbct}
         req = FabnetPacketRequest(method='CheckDataBlock', sender=self.operator.self_address, sync=True, parameters=params)
         resp = self.operator.call_node(range_obj.node_address, req)
 
         if resp.ret_code in (RC_NO_DATA, RC_INVALID_DATA):
-            logger.info('Invalid data block at %s with key=%s ([%s]%s). Sending valid block...'%\
-                    (range_obj.node_address, check_key, resp.ret_code, resp.ret_message))
+            logger.info('Invalid DB with key=%s at %s ([%s]%s). Sending valid block...'%\
+                    (check_key, range_obj.node_address, resp.ret_code, resp.ret_message))
 
             if self.operator.self_address == range_obj.node_address:
                 self.__local_moved.append((check_key, remote_dbct))
                 self.operator.copy_db(local_key, dbct, check_key, remote_dbct)
                 resp = FabnetPacketResponse()
             else:
-                params = {'key': check_key, 'dbct': remote_dbct, 'carefully_save': True, 'user_id_hash': user_id_hash}
+                params = {'key': check_key, 'dbct': remote_dbct, 'carefully_save': True, \
+                        'user_id_hash': header.user_id_hash, 'stored_unixtime': header.stored_dt}
                 req = FabnetPacketRequest(method='PutDataBlock', sender=self.operator.self_address, sync=True, \
                                             parameters=params, binary_data=db)
                 resp = self.operator.call_node(range_obj.node_address, req)

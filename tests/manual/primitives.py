@@ -181,13 +181,12 @@ def put_data_to_network(addresses, stat_buffer, perc=10):
             data = Random.new().read(1024*1024)
             checksum =  hashlib.sha1(data).hexdigest()
 
-            params = {'checksum': checksum, 'wait_writes_count': 3}
-            packet_obj = FabnetPacketRequest(method='ClientPutData', parameters=params, binary_data=RamBasedBinaryData(data), sync=True)
+            params = {'checksum': checksum, 'wait_writes_count': 3, 'init_block': True}
+            packet_obj = FabnetPacketRequest(method='ClientPutData', parameters=params, binary_data=RamBasedBinaryData(data))
 
             ret_packet = client.call_sync(random.choice(addresses), packet_obj)
             if ret_packet.ret_code != 0:
                 print 'ERROR! Cant put data block to network! Details: %s'%ret_packet.ret_message
-
 
         max_perc, full_cnt, dht_info_lst = get_maximum_free_space(addresses, perc)
         if full_cnt:
@@ -243,11 +242,11 @@ def destroy_data(address, nodenum):
     size = dht_info['range_size'] + dht_info['replicas_size']
 
     print '='*100
-    ret = os.system('sudo rm -rf %s/dht_range/%s_%s/*'%(homedir, dht_info['range_start'], dht_info['range_end']))
+    ret = os.system('sudo rm -rf %s/dht_range/mdb/*'%(homedir))
     if ret:
         raise Exception('Node %s range data does not destroyed!'%address)
     print '='*100
-    ret = os.system('sudo rm -rf %s/dht_range/replica_data/*'%homedir)
+    ret = os.system('sudo rm -rf %s/dht_range/rdb/*'%homedir)
     if ret:
         raise Exception('Node %s replica data does not destroyed!'%address)
 
@@ -468,21 +467,36 @@ def put_data_blocks(addresses, block_size=1024, blocks_count=1000):
 
     return keys
 
-def get_data_blocks(addresses, keys):
+def get_data_block(addresses, key):
     client = FriClient()
+    packet_obj = FabnetPacketRequest(method='GetKeysInfo', \
+            parameters={'key': key, 'replica_count': 2})
 
-    for key in keys:
-        params = {'key': key, 'replica_count':2}
-        packet_obj = FabnetPacketRequest(method='ClientGetData', parameters=params, sync=True)
-        nodeaddr = random.choice(addresses)
+    nodeaddr = random.choice(addresses)
+    ret_packet = client.call_sync(nodeaddr, packet_obj)
+    if ret_packet.ret_code != 0:
+        raise Exception('GetKeysInfo failed on %s: %s'%(nodeaddr, ret_packet.ret_message))
 
+    for key, dbct, nodeaddr in ret_packet.ret_parameters['keys_info']:
+        params = {'key': key, 'dbct': dbct}
+        packet_obj = FabnetPacketRequest(method='GetDataBlock', parameters=params)
         ret_packet = client.call_sync(nodeaddr, packet_obj)
         if ret_packet.ret_code != 0:
-            raise Exception('ClientGetData failed on %s: %s'%(nodeaddr, ret_packet.ret_message))
+            continue
 
         data = ret_packet.binary_data.data()
         if hashlib.sha1(data).hexdigest() != ret_packet.ret_parameters['checksum']:
-            raise Exception('Data block checksum failed!')
+            ret_packet.ret_message = 'Data block checksum failed!'
+            continue
+
+        return data
+        
+    raise Exception('GetDataBlock failed on %s: %s'%(nodeaddr, ret_packet.ret_message))
+
+def get_data_blocks(addresses, keys):
+    for key in keys:
+        get_data_block(addresses, key)
+
 
 def collect_topology_from_nodes(addresses):
     for address in addresses:
