@@ -14,6 +14,7 @@ import time
 import threading
 import random
 import traceback
+import shutil
 
 from fabnet.core.operator import Operator
 
@@ -25,7 +26,8 @@ from fabnet.core.constants import RC_OK, NT_SUPERIOR, NT_UPPER, ET_ALERT
 from fabnet_dht.repair_process import RepairProcess
 from fabnet_dht.constants import DS_INITIALIZE, DS_DESTROYING, DS_NORMALWORK, \
             DEFAULT_DHT_CONFIG, MIN_KEY, MAX_KEY, RC_OLD_DATA, RC_NO_FREE_SPACE, DS_PREINIT
-from fabnet_dht.fs_mapped_ranges import FSHashRanges
+from fabnet_dht.fs_mapped_ranges import FSMappedDHTRange
+from fabnet_dht.data_block import DataBlock, ThreadSafeDataBlock
 from fabnet_dht.operations.mgmt.get_range_data_request import GetRangeDataRequestOperation
 from fabnet_dht.operations.mgmt.get_ranges_table import GetRangesTableOperation
 from fabnet_dht.operations.mgmt.split_range_cancel import SplitRangeCancelOperation
@@ -33,16 +35,15 @@ from fabnet_dht.operations.mgmt.split_range_request import SplitRangeRequestOper
 from fabnet_dht.operations.mgmt.pull_subrange_request import PullSubrangeRequestOperation
 from fabnet_dht.operations.mgmt.update_hash_range_table import UpdateHashRangeTableOperation
 from fabnet_dht.operations.mgmt.check_hash_range_table import CheckHashRangeTableOperation
-from fabnet_dht.operations.get_data_keys import GetKeysInfoOperation
-from fabnet_dht.operations.put_data_keys import PutKeysInfoOperation
-from fabnet_dht.operations.client_get import ClientGetOperation
-from fabnet_dht.operations.client_put import ClientPutOperation
-from fabnet_dht.operations.delete_data_block import DeleteDataBlockOperation
-from fabnet_dht.operations.client_delete import ClientDeleteOperation
-from fabnet_dht.operations.put_data_block import PutDataBlockOperation
-from fabnet_dht.operations.get_data_block import GetDataBlockOperation
-from fabnet_dht.operations.check_data_block import CheckDataBlockOperation
-from fabnet_dht.operations.repair_data_blocks import RepairDataBlocksOperation
+
+from fabnet_dht.operations.data_access.put_data_block import PutDataBlockOperation
+from fabnet_dht.operations.data_access.client_put import ClientPutOperation
+from fabnet_dht.operations.data_access.get_data_block import GetDataBlockOperation
+from fabnet_dht.operations.data_access.get_data_keys import GetKeysInfoOperation
+from fabnet_dht.operations.data_access.delete_data_block import DeleteDataBlockOperation
+from fabnet_dht.operations.data_access.client_delete import ClientDeleteOperation
+from fabnet_dht.operations.data_access.check_data_block import CheckDataBlockOperation
+from fabnet_dht.operations.data_access.repair_data_blocks import RepairDataBlocksOperation
 from fabnet_dht.hash_ranges_table import HashRange, HashRangesTable
 
 OPERLIST = [GetRangeDataRequestOperation, GetRangesTableOperation,
@@ -51,8 +52,7 @@ OPERLIST = [GetRangeDataRequestOperation, GetRangesTableOperation,
              SplitRangeRequestOperation, PullSubrangeRequestOperation,
              UpdateHashRangeTableOperation, CheckHashRangeTableOperation,
              RepairDataBlocksOperation, GetKeysInfoOperation,
-             PutKeysInfoOperation, ClientGetOperation, ClientPutOperation,
-             DeleteDataBlockOperation, ClientDeleteOperation]
+             ClientPutOperation, DeleteDataBlockOperation, ClientDeleteOperation]
 
 class DHTOperator(Operator):
     def __init__(self, self_address, home_dir='/tmp/', key_storage=None, \
@@ -71,7 +71,7 @@ class DHTOperator(Operator):
             os.mkdir(self.save_path)
 
         self.__split_requests_cache = []
-        self.__dht_range = FSHashRanges.discovery_range(self.save_path, ret_full=is_init_node)
+        self.__dht_range = FSMappedDHTRange.discovery_range(self.save_path)
         self.ranges_table.append(self.__dht_range.get_start(), self.__dht_range.get_end(), self.self_address)
         self.__start_dht_try_count = 0
         self.__init_dht_thread = None
@@ -97,8 +97,12 @@ class DHTOperator(Operator):
         dht_i['status'] = self.status
         dht_i['range_start'] = '%040x'% dht_range.get_start()
         dht_i['range_end'] = '%040x'% dht_range.get_end()
-        dht_i['range_size'] = dht_range.get_range_size()
-        dht_i['replicas_size'] = dht_range.get_replicas_size()
+
+        #FIXME! make me in separate thread!
+        dht_i['range_size'] = dht_range.get_data_size(FSMappedDHTRange.DBCT_MASTER)
+        dht_i['replicas_size'] = dht_range.get_data_size(FSMappedDHTRange.DBCT_REPLICA)
+        dht_i['metadata_size'] = dht_range.get_data_size(FSMappedDHTRange.DBCT_MD_MASTER) \
+                                 + dht_range.get_data_size(FSMappedDHTRange.DBCT_MD_REPLICA)
         dht_i['free_size'] = dht_range.get_free_size()
         dht_i['free_size_percents'] = dht_range.get_free_size_percents()
         stat['DHTInfo'] = dht_i
@@ -219,10 +223,10 @@ class DHTOperator(Operator):
         curr_start = dht_range.get_start()
         curr_end = dht_range.get_end()
 
-        last_range = dht_range.get_last_range()
-        if last_range and not self.__split_requests_cache:
-            new_range = self.__get_next_range_near(last_range[0], last_range[1])
-        elif dht_range.is_max_range() or self.__split_requests_cache:
+        if len(self.__split_requests_cache) == 1: #after first fail try init with last range
+            dht_range = dht_range.get_last_range()
+
+        if dht_range.is_max_range() or self.__split_requests_cache:
             new_range = self.__get_next_max_range()
         else:
             new_range = self.__get_next_range_near(curr_start, curr_end)
@@ -239,18 +243,12 @@ class DHTOperator(Operator):
             self.__split_requests_cache = []
             self.check_range_table()
             return
-            #logger.info('No ready range for me on network... So, sleep and try again')
-            #self.__start_dht_try_count += 1
-            #self.__split_requests_cache = []
-            #time.sleep(float(Config.WAIT_RANGE_TIMEOUT))
-            #return self.start_as_dht_member()
 
         if (new_range.start == curr_start and new_range.end == curr_end):
             new_dht_range = dht_range
         else:
-            new_dht_range = FSHashRanges(long(new_range.start), long(new_range.end), self.save_path)
+            new_dht_range = FSMappedDHTRange(long(new_range.start), long(new_range.end), self.save_path)
             self.update_dht_range(new_dht_range)
-            new_dht_range.restore_from_reservation() #try getting new range data from reservation
 
         if new_range.node_address == self.self_address:
             self._take_range(new_range)
@@ -277,8 +275,6 @@ class DHTOperator(Operator):
         old_dht_range = self.__dht_range
         self.__dht_range = new_dht_range
         self._unlock()
-
-        old_dht_range.move_to_reservation()
 
         dht_range = self.get_dht_range()
         logger.info('New node range: %040x-%040x' % (dht_range.get_start(), dht_range.get_end()))
@@ -404,59 +400,6 @@ class DHTOperator(Operator):
                     parameters={'append': append_lst, 'remove': rm_lst})
         self.call_network(req)
 
-    def get_data_block_path(self, key, is_replica):
-        return self.get_dht_range().get_path(key, is_replica)
-
-    def delete_data_block(self, key, is_replica, user_id, carefully_delete=True):
-        self.get_dht_range().delete_data_block(key, is_replica, user_id, carefully_delete)
-
-    def get_tempfile(self):
-        return self.get_dht_range().tempfile()
-
-    def join_subranges(self):
-        self.get_dht_range().join_subranges()
-
-    def put_data_block(self, key, tempfile_path, is_replica, carefully_save):
-        self.get_dht_range().put(key, tempfile_path, is_replica, carefully_save)
-
-    def get_subranges(self):
-        self.get_dht_range().get_subranges()
-
-    def send_subrange_data(self, node_address):
-        dht_range = self.get_dht_range()
-        subranges = dht_range.get_subranges()
-        if not subranges:
-            raise Exception('Range is not splitted!')
-
-        ret_range, new_range = subranges
-        try:
-            logger.debug('Starting subrange data transfering to %s'% node_address)
-            for key, data in ret_range.iter_range():
-                params = {'key': key, 'carefully_save': True}
-                req = FabnetPacketRequest(method='PutDataBlock', \
-                                    sender=self.self_address, binary_data=data, sync=True,
-                                    parameters=params)
-
-                resp = self.call_node(node_address, req)
-                if resp.ret_code:
-                    raise Exception('Init PutDataBlock operation on %s error. Details: %s'%(node_address, resp.ret_message))
-
-            self.update_dht_range(new_range)
-            self.set_status_to_normalwork(save_range=True)
-        except Exception, err:
-            logger.error('send_subrange_data error: %s'%err)
-            dht_range.join_subranges()
-            raise err
-
-        ret_range._destroy(force=True)
-        append_lst = [(ret_range.get_start(), ret_range.get_end(), node_address)]
-        append_lst.append((new_range.get_start(), new_range.get_end(), self.self_address))
-        rm_lst = [(dht_range.get_start(), dht_range.get_end(), self.self_address)]
-        req = FabnetPacketRequest(method='UpdateHashRangeTable', \
-                    sender=self.self_address,\
-                    parameters={'append': append_lst, 'remove': rm_lst})
-        self.call_network(req)
-
     def find_range(self, key):
         if type(key) in (str, unicode):
             key = long(key, 16)
@@ -494,12 +437,15 @@ class DHTOperator(Operator):
 
         subranges = dht_range.get_subranges()
         if subranges:
-            raise Exception('Already splitting')
+            raise Exception('Already splitted %s'%str(subranges))
 
         ret_range, new_range = dht_range.split_range(start_key, end_key)
-        range_size = ret_range.get_all_related_data_size()
+        range_size = ret_range.get_data_size()
 
         return range_size
+
+    def join_subranges(self):
+        self.get_dht_range().join_subranges()
 
     def accept_foreign_subrange(self, foreign_node, subrange_size):
         dht_range = self.get_dht_range()
@@ -543,6 +489,52 @@ class DHTOperator(Operator):
         self.call_node(neighbour, packet_obj)
         return True
 
+    def get_db_path(self, key, cnt_type):
+        return self.get_dht_range().get_db_path(key, cnt_type)
+
+    def copy_db(self, s_key, s_ct, d_key, d_ct):
+        s_path = self.get_dht_range().get_db_path(s_key, s_ct)
+        d_path = self.get_dht_range().get_db_path(d_key, d_ct)
+        shutil.copyfile(s_path, d_path)
+
+    def send_subrange_data(self, node_address):
+        dht_range = self.get_dht_range()
+        subranges = dht_range.get_subranges()
+        if not subranges:
+            raise Exception('Range is not splitted!')
+
+        ret_range, new_range = subranges
+        try:
+            self.__monitor_dht_ranges.force()
+            '''
+            logger.debug('Starting subrange data transfering to %s'% node_address)
+            for key, data in ret_range.iterator():
+                params = {'key': key, 'carefully_save': True}
+                req = FabnetPacketRequest(method='PutDataBlock', \
+                                    sender=self.self_address, binary_data=data, sync=True,
+                                    parameters=params)
+
+                resp = self.call_node(node_address, req)
+                if resp.ret_code:
+                    raise Exception('Init PutDataBlock operation on %s error. Details: %s'%(node_address, resp.ret_message))
+            '''
+            self.update_dht_range(new_range)
+            self.set_status_to_normalwork(save_range=True)
+        except Exception, err:
+            logger.error('send_subrange_data error: %s'%err)
+            dht_range.join_subranges()
+            raise err
+
+        append_lst = [(ret_range.get_start(), ret_range.get_end(), node_address)]
+        append_lst.append((new_range.get_start(), new_range.get_end(), self.self_address))
+        rm_lst = [(dht_range.get_start(), dht_range.get_end(), self.self_address)]
+        req = FabnetPacketRequest(method='UpdateHashRangeTable', \
+                    sender=self.self_address,\
+                    parameters={'append': append_lst, 'remove': rm_lst})
+        self.call_network(req)
+
+
+
 
 
 class CheckLocalHashTableThread(threading.Thread):
@@ -573,14 +565,17 @@ class CheckLocalHashTableThread(threading.Thread):
     def stop(self):
         self.stopped.set()
 
+
 class MonitorDHTRanges(threading.Thread):
     def __init__(self, operator):
         threading.Thread.__init__(self)
         self.operator = operator
         self.stopped = threading.Event()
+        self.interrupt = threading.Event()
 
         self.__last_is_start_part = True
         self.__notification_flag = False
+        self.__changed_range = False
         self.__full_nodes = []
 
     def _check_range_free_size(self):
@@ -589,6 +584,10 @@ class MonitorDHTRanges(threading.Thread):
         free_percents = dht_range.get_free_size_percents()
         percents = 100 - free_percents
         if percents >= float(Config.MAX_USED_SIZE_PERCENTS):
+            if self.__changed_range:
+                logger.warning('Critical free disk space! Waiting data move...')
+                return
+
             if free_percents < float(Config.CRITICAL_FREE_SPACE_PERCENT):
                 logger.warning('Critical free disk space! Blocking range for write!')
                 dht_range.block_for_write(float(Config.CRITICAL_FREE_SPACE_PERCENT))
@@ -607,6 +606,7 @@ class MonitorDHTRanges(threading.Thread):
             self.operator.call_network(packet)
             self.__notification_flag = True
         else:
+            self.__changed_range = False
             self.__notification_flag = False
 
     def _pull_subrange(self, dht_range):
@@ -636,7 +636,7 @@ class MonitorDHTRanges(threading.Thread):
             return False
 
         pull_subrange, new_dht_range = dht_range.split_range(start_subrange, end_subrange)
-        subrange_size = pull_subrange.get_all_related_data_size()
+        subrange_size = pull_subrange.get_data_size()
 
         try:
             logger.info('Call PullSubrangeRequest [%040x-%040x] to %s'%(pull_subrange.get_start(), pull_subrange.get_end(), k_range.node_address))
@@ -648,38 +648,30 @@ class MonitorDHTRanges(threading.Thread):
 
             new_dht_range.save_range()
             self.operator.update_dht_range(new_dht_range)
-            pull_subrange.move_to_reservation()
+            self.__changed_range = True
         except Exception, err:
             logger.error('PullSubrangeRequest operation failed on node %s. Details: %s'%(k_range.node_address, err))
             dht_range.join_subranges()
             return False
         return True
 
-    def _process_reservation_range(self):
+    def _process_foreign(self):
         self.__full_nodes = []
         dht_range = self.operator.get_dht_range()
-
-        for digest, data, file_path in dht_range.iter_reservation():
+        cnt = 0
+        for digest, dbct, file_path in dht_range.iterator(foreign_only=True):
+            cnt += 1
             if self.stopped.is_set():
                 break
-            logger.info('Processing %s from reservation range'%digest)
-            if self._put_data(digest, data):
-                logger.debug('data block with key=%s is send from reservation range'%digest)
-                os.unlink(file_path)
+            logger.info('Processing foreign data block %s %s'%(digest, dbct))
+            if self._put_data(digest, file_path, dbct):
+                logger.debug('data block with key=%s is send'%digest)
+                os.remove(file_path)
 
-    def _process_replicas(self):
-        self.__full_nodes = []
-        dht_range = self.operator.get_dht_range()
-        for digest, data, file_path in dht_range.iter_replicas():
-            if self.stopped.is_set():
-                break
-            logger.info('Processing replica %s'%digest)
-            if self._put_data(digest, data, is_replica=True):
-                logger.debug('data block with key=%s is send from replicas range'%digest)
-                os.unlink(file_path)
+        if cnt == 0:
+            self.__changed_range = False
 
-
-    def _put_data(self, key, data, is_replica=False):
+    def _put_data(self, key, path, dbct):
         k_range = self.operator.ranges_table.find(long(key, 16))
         if not k_range:
             logger.debug('No range found for reservation key %s'%key)
@@ -689,14 +681,19 @@ class MonitorDHTRanges(threading.Thread):
             logger.info('Node %s does not have free space. Skipping put data block...'%k_range.node_address)
             return False
 
-        params = {'key': key, 'is_replica': is_replica, 'carefully_save': True}
+        if k_range.node_address == self.operator.self_address:
+            logger.info('Skip moving to local node')
+            return False
+
+        params = {'key': key, 'dbct': dbct, 'carefully_save': True}
         req = FabnetPacketRequest(method='PutDataBlock', sender=self.operator.self_address, \
-                parameters=params, binary_data=data, sync=True)
+                parameters=params, binary_data=ThreadSafeDataBlock(path), sync=True)
 
         resp = self.operator.call_node(k_range.node_address, req)
 
         if resp.ret_code == RC_NO_FREE_SPACE:
             self.__full_nodes.append(k_range.node_address)
+            return False
 
         if resp.ret_code not in (RC_OK, RC_OLD_DATA):
             logger.error('PutDataBlock error on %s: %s'%(k_range.node_address, resp.ret_message))
@@ -711,6 +708,9 @@ class MonitorDHTRanges(threading.Thread):
             for i in xrange(int(Config.MONITOR_DHT_RANGES_TIMEOUT)):
                 if self.stopped.is_set():
                     break
+                if self.interrupt.is_set():
+                    self.interrupt.clear()
+                    break
                 time.sleep(1)
 
             if self.stopped.is_set():
@@ -718,16 +718,11 @@ class MonitorDHTRanges(threading.Thread):
 
             try:
                 logger.debug('MonitorDHTRanges iteration...')
+                self._process_foreign()
+                if self.stopped.is_set():
+                    break
 
                 self._check_range_free_size()
-                if self.stopped.is_set():
-                    break
-
-                self._process_reservation_range()
-                if self.stopped.is_set():
-                    break
-
-                self._process_replicas()
                 if self.stopped.is_set():
                     break
             except Exception, err:
@@ -740,5 +735,7 @@ class MonitorDHTRanges(threading.Thread):
     def stop(self):
         self.stopped.set()
 
+    def force(self):
+        self.interrupt.set()
 
 DHTOperator.update_operations_list(OPERLIST)

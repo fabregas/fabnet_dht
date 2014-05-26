@@ -47,3 +47,12 @@ class KeyUtils:
             return '%040x' % int(key, 16)
         return key
 
+    @classmethod
+    def validate(self, key):
+        try:
+            key = str(key)
+            if len(key) != 40:
+                raise ValueError()
+            return long(key, 16)
+        except Exception:
+            raise Exception('Invalid key "%s"'%key)

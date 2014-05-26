@@ -1,36 +1,29 @@
 #!/usr/bin/python
 """
-Copyright (C) 2012 Konstantin Andrusenko
+Copyright (C) 2014 Konstantin Andrusenko
     See the documentation for further information on copyrights,
     or contact the author. All Rights Reserved.
 
 @package fabnet_dht.operations.get_data_keys
 
 @author Konstantin Andrusenko
-@date October 16, 2012
+@date May 25, 2014
 """
-import hashlib
-
 from fabnet.core.operation_base import  OperationBase
 from fabnet.core.fri_base import FabnetPacketResponse
 from fabnet.core.constants import RC_OK, RC_ERROR
 from fabnet.utils.logger import oper_logger as logger
 from fabnet.core.constants import NODE_ROLE, CLIENT_ROLE
 
-from fabnet_dht.constants import MIN_REPLICA_COUNT, RC_NO_DATA
 from fabnet_dht.key_utils import KeyUtils
+from fabnet_dht.fs_mapped_ranges import FSMappedDHTRange
 
 class GetKeysInfoOperation(OperationBase):
     ROLES = [NODE_ROLE, CLIENT_ROLE]
     NAME='GetKeysInfo'
 
-    def _validate_key(self, key):
-        try:
-            if len(key) != 40:
-                raise ValueError()
-            return long(key, 16)
-        except Exception:
-            raise Exception('Invalid key "%s"'%key)
+    def init_locals(self):
+        self.node_name = self.operator.get_node_name()
 
     def process(self, packet):
         """In this method should be implemented logic of processing
@@ -42,29 +35,30 @@ class GetKeysInfoOperation(OperationBase):
         """
         key = packet.parameters.get('key', None)
         replica_count = packet.parameters.get('replica_count', None)
-        if key is None:
-            return FabnetPacketResponse(ret_code=RC_ERROR,
-                    ret_message='Key is not found in request packet!')
+        if key is not None:
+            KeyUtils.validate(key)
 
-        if replica_count is None:
-            return FabnetPacketResponse(ret_code=RC_ERROR,
-                    ret_message='Replica count should be passed to GetKeysInfo operation')
+            if replica_count is None:
+                return FabnetPacketResponse(ret_code=RC_ERROR,
+                        ret_message='Replica count should be passed to GetKeysInfo operation')
 
-        self._validate_key(key)
-        keys = KeyUtils.get_all_keys(key, replica_count)
+            keys = KeyUtils.get_all_keys(key, replica_count)
+        else:
+            key = KeyUtils.generate_key(self.node_name)
+            keys = [key]
 
-        is_replica = False
+        msg = ''
         ret_keys = []
-        for key in keys:
-            long_key = self._validate_key(key)
+        for i, key in enumerate(keys):
+            cur_dbct = FSMappedDHTRange.DBCT_MASTER if i == 0 else FSMappedDHTRange.DBCT_REPLICA
+            long_key = KeyUtils.validate(key)
             range_obj = self.operator.find_range(long_key)
             if not range_obj:
-                logger.warning('[GetKeysInfoOperation] Internal error: No hash range found for key=%s!'%key)
+                msg += '[GetKeysInfoOperation] Internal error: No hash range found for key=%s! \n'%key
             else:
                 _, _, node_address = range_obj
-                ret_keys.append((key, is_replica, node_address))
-            is_replica = True
+                ret_keys.append((key, cur_dbct, node_address))
 
-        return FabnetPacketResponse(ret_parameters={'keys_info': ret_keys})
+        return FabnetPacketResponse(ret_parameters={'keys_info': ret_keys}, ret_message=msg)
 
 

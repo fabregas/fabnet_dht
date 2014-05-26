@@ -9,14 +9,17 @@ Copyright (C) 2012 Konstantin Andrusenko
 @author Konstantin Andrusenko
 @date October 3, 2012
 """
+import hashlib
 from fabnet.core.operation_base import  OperationBase
 from fabnet.core.fri_base import FabnetPacketResponse
 from fabnet.core.constants import RC_OK, RC_ERROR, RC_PERMISSION_DENIED
 from fabnet.core.constants import NODE_ROLE, CLIENT_ROLE
 
 from fabnet_dht.constants import RC_NO_DATA
-from fabnet_dht.data_block import DataBlockHeader
-from fabnet_dht.fs_mapped_ranges import FileBasedChunks, FSHashRangesNoData
+from fabnet.core.fri_base import FileBasedChunks
+from fabnet_dht.fs_mapped_ranges import FSMappedDHTRange, FSHashRangesNoData
+from fabnet_dht.data_block import DataBlockHeader, DataBlock, ThreadSafeDataBlock
+from fabnet_dht.fs_mapped_ranges import FSHashRangesPermissionDenied, FSHashRangesNoData
 
 class GetDataBlockOperation(OperationBase):
     ROLES = [NODE_ROLE, CLIENT_ROLE]
@@ -30,29 +33,35 @@ class GetDataBlockOperation(OperationBase):
         @return object of FabnetPacketResponse
                 or None for disabling packet response to sender
         """
-        key = packet.parameters.get('key', None)
-        is_replica = packet.parameters.get('is_replica', False)
+        key = packet.str_get('key')
+        dbct = packet.str_get('dbct', FSMappedDHTRange.DBCT_MASTER)
+
         if packet.role == CLIENT_ROLE:
-            r_user_id = packet.user_id
+            user_id_hash = hashlib.sha1(str(packet.user_id)).hexdigest()
         else:
-            r_user_id = packet.parameters.get('user_id', None)
+            user_id_hash = packet.str_get('user_id_hash', '')
 
-        if key is None:
-            return FabnetPacketResponse(ret_code=RC_ERROR, ret_message='Key is not found in request packet!')
-
+        db = None
         try:
-            path = self.operator.get_data_block_path(key, is_replica)
+            db_path = self.operator.get_db_path(key, dbct)
+            db = DataBlock(db_path)
+            if not db.exists():
+                raise FSHashRangesNoData('No data found!')
+
+            raw = db.get_next_chunk(DataBlockHeader.HEADER_LEN)
+            if user_id_hash:
+                header = DataBlockHeader.unpack(raw)
+                header.match(user_id_hash=user_id_hash)
+
+            return FabnetPacketResponse(binary_data=db, ret_parameters={'checksum': header.checksum})
         except Exception, err:
-            return FabnetPacketResponse(ret_code=RC_NO_DATA, ret_message=str(err))
-
-        data = FileBasedChunks(path)
-        header = data.read(DataBlockHeader.HEADER_LEN)
-        _, _, checksum, user_id_hash, _ = DataBlockHeader.unpack(header)
-        if r_user_id:
-            if not DataBlockHeader.match(r_user_id, user_id_hash):
-                return FabnetPacketResponse(ret_code=RC_PERMISSION_DENIED, ret_message='permission denied')
-
-        return FabnetPacketResponse(binary_data=data, ret_parameters={'checksum': checksum})
+            if db:
+                db.close()
+            if err.__class__ == FSHashRangesPermissionDenied:
+                return FabnetPacketResponse(ret_code=RC_PERMISSION_DENIED, ret_message=str(err))
+            elif err.__class__ == FSHashRangesNoData:
+                return FabnetPacketResponse(ret_code=RC_NO_DATA, ret_message='No data found')
+            return FabnetPacketResponse(ret_code=RC_ERROR, ret_message='Unexpected error: %s'%err)
 
 
     def callback(self, packet, sender=None):

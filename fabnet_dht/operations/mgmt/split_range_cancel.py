@@ -16,7 +16,7 @@ from fabnet.core.constants import NODE_ROLE
 
 
 class SplitRangeCancelOperation(OperationBase):
-    ROELS = [NODE_ROLE]
+    ROLES = [NODE_ROLE]
     NAME = 'SplitRangeCancel'
 
     def process(self, packet):
@@ -45,5 +45,5 @@ class SplitRangeCancelOperation(OperationBase):
                 that should be resended to current node requestor
                 or None for disabling packet resending
         """
-        logger.info('Trying select other hash range...')
+        logger.info('SplitRangeCancel. Trying select other hash range...')
         self.operator.start_as_dht_member()

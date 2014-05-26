@@ -14,11 +14,12 @@ import hashlib
 
 from fabnet.utils.logger import oper_logger as logger
 from fabnet.core.constants import RC_OK, RC_ERROR
-from fabnet.core.fri_base import FabnetPacketRequest
+from fabnet.core.fri_base import FabnetPacketRequest, FabnetPacketResponse
 
 from fabnet_dht.constants import RC_NO_DATA, RC_INVALID_DATA, RC_OLD_DATA
-from fabnet_dht.data_block import DataBlockHeader
 from fabnet_dht.key_utils import KeyUtils
+from fabnet_dht.data_block import DataBlock, ThreadSafeDataBlock
+from fabnet_dht.fs_mapped_ranges import FSMappedDHTRange
 
 class RepairProcess:
     def __init__(self, operator):
@@ -27,6 +28,7 @@ class RepairProcess:
         self.__repaired_foreign_blocks = 0
         self.__failed_repair_foreign_blocks = 0
         self.__processed_local_blocks = 0
+        self.__local_moved = []
 
     def __init_stat(self, params):
         self.__processes_data_blocks = 0
@@ -34,6 +36,7 @@ class RepairProcess:
         self.__repaired_foreign_blocks = 0
         self.__failed_repair_foreign_blocks = 0
         self.__processed_local_blocks = 0
+        self.__local_moved = []
 
         self.__check_range_start = params.get('check_range_start', None)
         self.__check_range_end = params.get('check_range_end', None)
@@ -61,45 +64,43 @@ class RepairProcess:
         self.__init_stat(params)
         dht_range = self.operator.get_dht_range()
 
-        logger.info('[RepairDataBlocks] Processing local DHT range...')
-        for key, data, _ in dht_range.iter_data_blocks():
-            self.__process_data_block(key, data, False)
-        logger.info('[RepairDataBlocks] Local DHT range is processed!')
-
-        logger.info('[RepairDataBlocks] Processing local replica data...')
-        for key, data, _ in dht_range.iter_replicas(foreign_only=False):
-            self.__process_data_block(key, data, True)
-        logger.info('[RepairDataBlocks] Local replica data is processed!')
+        logger.info('[RepairDataBlocks] Processing DHT range...')
+        for key, dbct, path in dht_range.iterator([FSMappedDHTRange.DBCT_MASTER, FSMappedDHTRange.DBCT_REPLICA]):
+            if (key, dbct) in self.__local_moved:
+                continue
+            self.__process_data_block(key, path, dbct)
+        logger.info('[RepairDataBlocks] DHT range is processed!')
 
         return self.__get_stat()
 
-    def __process_data_block(self, key, raw_data, is_replica=False):
+    def __process_data_block(self, key, path, dbct):
         self.__processed_local_blocks += 1
-        try:
-            raw_header = raw_data.read(DataBlockHeader.HEADER_LEN)
-            primary_key, replica_count, checksum, user_id, stored_dt = DataBlockHeader.unpack(raw_header)
-            if not is_replica:
-                if key != primary_key:
-                    raise Exception('Primary key is invalid: %s != %s'%(key, primary_key))
+        with ThreadSafeDataBlock(path) as db:
+            try:
+                header = db.get_header()
+                data_keys = KeyUtils.get_all_keys(header.master_key, header.replica_count)
 
-            data_keys = KeyUtils.get_all_keys(primary_key, replica_count)
-            if is_replica:
-                if key not in data_keys:
-                    raise Exception('Replica key is invalid: %s'%key)
-        except Exception, err:
-            self.__invalid_local_blocks += 1
-            logger.error('[RepairDataBlocks] %s'%err)
-            return
+                if dbct == FSMappedDHTRange.DBCT_MASTER and key != header.master_key:
+                    raise Exception('Master key is invalid: %s != %s'%(key, header.master_key))
+                elif dbct == FSMappedDHTRange.DBCT_REPLICA:
+                    if key not in data_keys:
+                        raise Exception('Replica key is invalid: %s'%key)
+            except Exception, err:
+                self.__invalid_local_blocks += 1
+                logger.error('[RepairDataBlocks] %s'%err)
+                return
 
-        if is_replica and self._in_check_range(data_keys[0]):
-            self.__check_data_block(key, is_replica,  data_keys[0], checksum, is_replica=False)
+            if dbct == FSMappedDHTRange.DBCT_REPLICA and self._in_check_range(data_keys[0]):
+                self.__check_data_block(key, db, dbct,  data_keys[0], \
+                        header.checksum, header.user_id_hash, FSMappedDHTRange.DBCT_MASTER)
 
-        for repl_key in data_keys[1:]:
-            if repl_key == key:
-                continue
+            for repl_key in data_keys[1:]:
+                if repl_key == key:
+                    continue
 
-            if self._in_check_range(repl_key):
-                self.__check_data_block(key, is_replica, repl_key, checksum, is_replica=True)
+                if self._in_check_range(repl_key):
+                    self.__check_data_block(key, db, dbct, repl_key, \
+                            header.checksum, header.user_id_hash, FSMappedDHTRange.DBCT_REPLICA)
 
     def __validate_key(self, key):
         try:
@@ -109,26 +110,30 @@ class RepairProcess:
         except Exception:
             return None
 
-    def __check_data_block(self, local_key, local_is_replica, check_key, checksum, is_replica=False):
+    def __check_data_block(self, local_key, db, dbct, check_key, checksum, user_id_hash, remote_dbct):
         long_key = self.__validate_key(check_key)
         if long_key is None:
             logger.error('[RepairDataBlocks] Invalid data key "%s"'%key)
             self.__invalid_local_blocks += 1
 
         range_obj = self.operator.ranges_table.find(long_key)
-        params = {'key': check_key, 'checksum': checksum, 'is_replica': is_replica}
+        params = {'key': check_key, 'checksum': checksum, 'dbct': remote_dbct}
         req = FabnetPacketRequest(method='CheckDataBlock', sender=self.operator.self_address, sync=True, parameters=params)
         resp = self.operator.call_node(range_obj.node_address, req)
 
         if resp.ret_code in (RC_NO_DATA, RC_INVALID_DATA):
             logger.info('Invalid data block at %s with key=%s ([%s]%s). Sending valid block...'%\
                     (range_obj.node_address, check_key, resp.ret_code, resp.ret_message))
-            data = self.operator.get_dht_range().get(local_key, local_is_replica)
 
-            params = {'key': check_key, 'is_replica': is_replica, 'carefully_save': True}
-            req = FabnetPacketRequest(method='PutDataBlock', sender=self.operator.self_address, sync=True, \
-                                        parameters=params, binary_data=data)
-            resp = self.operator.call_node(range_obj.node_address, req)
+            if self.operator.self_address == range_obj.node_address:
+                self.__local_moved.append((check_key, remote_dbct))
+                self.operator.copy_db(local_key, dbct, check_key, remote_dbct)
+                resp = FabnetPacketResponse()
+            else:
+                params = {'key': check_key, 'dbct': remote_dbct, 'carefully_save': True, 'user_id_hash': user_id_hash}
+                req = FabnetPacketRequest(method='PutDataBlock', sender=self.operator.self_address, sync=True, \
+                                            parameters=params, binary_data=db)
+                resp = self.operator.call_node(range_obj.node_address, req)
 
             if resp.ret_code == RC_OLD_DATA:
                 self.__invalid_local_blocks += 1

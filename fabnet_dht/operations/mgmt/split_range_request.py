@@ -59,7 +59,7 @@ class SplitRangeRequestOperation(OperationBase):
         """
         if packet.ret_code != RC_OK:
             logger.error('Cant split range from %s. Details: %s'%(sender, packet.ret_message))
-            logger.info('Trying select other hash range...')
+            logger.info('SplitRangeRequest failed! Trying select other hash range...')
             self.operator.start_as_dht_member()
         else:
             subrange_size = int(packet.ret_parameters['range_size'])

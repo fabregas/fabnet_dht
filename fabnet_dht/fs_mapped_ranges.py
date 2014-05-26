@@ -10,204 +10,16 @@ Copyright (C) 2014 Konstantin Andrusenko
 @date May 23, 2014
 """
 import os
-import fcntl
-import shutil
 import threading
 import copy
 import json
-import time
 import errno
 
 from fabnet.utils.logger import oper_logger as logger
 from fabnet_dht.constants import MIN_KEY, MAX_KEY
+from fabnet_dht.data_block import DataBlock, ThreadSafeDataBlock
+from fabnet_dht.exceptions import *
 
-class FSHashRangesException(Exception):
-    pass
-
-class FSHashRangesNotFound(FSHashRangesException):
-    pass
-
-class FSHashRangesNoData(FSHashRangesException):
-    pass
-
-class FSHashRangesOldDataDetected(FSHashRangesException):
-    pass
-
-class FSHashRangesPermissionDenied(FSHashRangesException):
-    pass
-
-class FSHashRangesNoFreeSpace(FSHashRangesException):
-    pass
-
-class DataBlock:
-    __TD_LOCKS = {}
-    __TD_LOCK = threading.Lock()
-    NEED_THRD_LOCK = False
-
-    @classmethod
-    def __try_thread_lock(cls, path, shared=False):
-        cls.__TD_LOCK.acquire()
-        try:
-            lock = cls.__TD_LOCKS.get(path, None)
-            cur_thrd_id = threading.current_thread().ident
-            if lock is None:
-                cls.__TD_LOCKS[path] = (cur_thrd_id, shared, 1)
-                return True
-            thrd_id, lock, cnt = lock
-            if shared:
-                if thrd_id == cur_thrd_id:
-                    return True
-                if lock == shared:
-                    cls.__TD_LOCKS[path] = (cur_thrd_id, shared, cnt+1)
-                    return True
-            else:
-                if thrd_id == cur_thrd_id:
-                    cls.__TD_LOCKS[path] = (thrd_id, shared, 1)
-                    return True
-            return False
-        finally:
-            cls.__TD_LOCK.release()
-            
-    @classmethod
-    def __thread_lock(cls, path, shared=False):
-        while not cls.__try_thread_lock(path, shared):
-            time.sleep(0.01)
-
-    @classmethod
-    def __thread_unlock(cls, path):
-        cls.__TD_LOCK.acquire()
-        try:
-            lock = cls.__TD_LOCKS.get(path, None)
-            if lock is None:
-                return
-            cur_thrd_id = threading.current_thread().ident
-            thrd_id, lock, cnt = lock
-            if lock == True: #shared
-                cnt -= 1
-                if cnt == 0:
-                    del cls.__TD_LOCKS[path]
-                else:
-                    cls.__TD_LOCKS[path] = (thrd_id, lock, cnt)
-            else:
-                if cur_thrd_id != thrd_id:
-                    return
-                del cls.__TD_LOCKS[path]
-        finally:
-            cls.__TD_LOCK.release()
-
-    def __init__(self, path):
-        self.__path = path
-        self.__fd = None
-        self.__blocked = False
-
-    def __open(self):
-        self.__fd = os.open(self.__path, os.O_RDWR | os.O_CREAT)
-        fcntl.lockf(self.__fd, fcntl.LOCK_SH)
-        if self.NEED_THRD_LOCK:
-            self.__thread_lock(self.__path, shared=True)
-
-    def exists(self):
-        '''return True if data block file is already exists'''
-        return os.path.exists(self.__path)
-
-    def read(self, bytes_cnt=0, seek=0, iterate=False):
-        '''read bytes_cnt bytes of data from data block file
-        if bytes_cnt <= 0 - all data will be read
-        if seek > 0 - start read from seek position, else - from start of file
-        if iterate is True then return iterator over file that
-        will continuosly get portions of data at most bytes_cnt size until EOF
-        '''
-        if not self.__fd:
-            self.__open()
-
-        if seek:
-            os.lseek(self.__fd, seek, os.SEEK_SET)
-        else:
-            os.lseek(self.__fd, 0, os.SEEK_SET) #move to start
-
-        def iterator_func(bytes_cnt):
-            if bytes_cnt <= 0:
-                bytes_cnt = 1024
-
-            while True:
-                data = os.read(self.__fd, bytes_cnt)
-                if not data:
-                    return
-                yield data
-
-        if iterate:
-            return iterator_func(bytes_cnt)
-        else:
-            if bytes_cnt > 0:
-                return os.read(self.__fd, bytes_cnt)
-            else:
-                ret_data = ''
-                for data in iterator_func(bytes_cnt):
-                    ret_data += data
-                return ret_data
-
-    def write(self, buf, seek=0, iterate=False, truncate=False):
-        '''write buf string to data block file
-        If seek > 0 write process will be started from seek position,
-        else - write to end of data block
-        If iterate == True, buf will be used as iterator that continously get data
-        '''
-        self._block()
-        try:
-            if truncate:
-                os.ftruncate(self.__fd, seek)
-            if seek:
-                os.lseek(self.__fd, seek, os.SEEK_SET)
-            else:
-                os.lseek(self.__fd, 0, os.SEEK_END) #move to end
-
-            if iterate:
-                for data in buf:
-                    os.write(self.__fd, data)
-            else:
-                os.write(self.__fd, buf)
-
-            os.fsync(self.__fd)
-        finally:
-            self._unblock()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, type, value, trace):
-        self.close()
-
-    def _block(self):
-        '''open data block file (if not opened), lock file with exclusive lock
-        and keep file opened'''
-        if not self.__fd:
-            self.__open()
-
-        if self.__blocked:
-            return
-        if self.NEED_THRD_LOCK:
-            self.__thread_lock(self.__path, shared=False)
-        fcntl.lockf(self.__fd, fcntl.LOCK_EX)
-
-    def _unblock(self):
-        '''unlock and file descriptor'''
-        if self.__blocked:
-            if self.NEED_THRD_LOCK:
-                self.__thread_unlock(self.__path)
-            fcntl.lockf(self.__fd, fcntl.LOCK_UN)
-            self.__blocked = False
-
-    def close(self):
-        '''close file descriptor is opened'''
-        if self.NEED_THRD_LOCK:
-            self.__thread_unlock(self.__path)
-        if self.__fd:
-            os.close(self.__fd)
-            self.__fd = None
-
-
-class ThreadSafedDataBlock(DataBlock):
-    NEED_THRD_LOCK = True
 
 class FSMappedDHTRange:
     #data blocks content type
@@ -217,7 +29,8 @@ class FSMappedDHTRange:
     DBCT_MD_REPLICA = 'rmd'
     DBCT_TEMP = 'tmp'
 
-    __DBCT_LIST = (DBCT_MASTER, DBCT_REPLICA, DBCT_MD_MASTER, DBCT_MD_REPLICA, DBCT_TEMP)
+    __DBCT_LIST_RANGES = [DBCT_MASTER, DBCT_REPLICA, DBCT_MD_MASTER, DBCT_MD_REPLICA]
+    __DBCT_LIST = __DBCT_LIST_RANGES + [DBCT_TEMP]
     __RANGE_INFO_FN = 'range_info'
 
     @classmethod 
@@ -298,7 +111,8 @@ class FSMappedDHTRange:
             self.__range_info.close()
 
     def get_last_range(self):
-        return self.__get_saved_range('old_range_start', 'old_range_end')
+        start, end = self.__get_saved_range('old_range_start', 'old_range_end')
+        return FSMappedDHTRange(start, end, self.__range_path)
 
     def __get_saved_range(self, start_f_name, end_f_name):
         raw_data = self.__range_info.read()
@@ -397,9 +211,10 @@ class FSMappedDHTRange:
         h_range.save_range()
         return h_range
 
-    def iterator(self, db_content_type, foreign_only=False, all_data=False):
+    def iterator(self, db_content_type=None, foreign_only=False, all_data=False):
         '''iterator over data blocks
-        - db_content_type should be one of DBCT_* constants
+        - db_content_type should be one of DBCT_* constants or list of DBCT_* constants
+          if db_content_type is None - iterate over all content types
         - if foreign_only is False then data blocks in range [range_start, range_end]
           will be iterated. Else - only data blocks NOT in range [range_start, range_end]
         - if all_data is True - iterate all data blocks with requested content type
@@ -408,24 +223,38 @@ class FSMappedDHTRange:
         yield (<data block key>, <data block full path>)
         '''
         try:
-            f_path = self.__dirs_map.get(db_content_type, None)
-            if f_path is None:
-                raise FSHashRangesException('Unknown data block content type "%s"'%db_content_type)
+            if db_content_type is None:
+                db_ct_list = []
+                for ct, path in self.__dirs_map.items():
+                    if ct in self.__DBCT_LIST_RANGES:
+                        db_ct_list.append((ct, path))
+            elif type(db_content_type) in (list, tuple):
+                db_ct_list = []
+                for ct in db_content_type:
+                    if ct not in self.__DBCT_LIST_RANGES:
+                        raise FSHashRangesException('Unsupported data block content type "%s"'%ct)
+                    db_ct_list.append((ct, self.__dirs_map[ct]))
+            else:
+                f_path = self.__dirs_map.get(db_content_type, None)
+                if f_path is None:
+                    raise FSHashRangesException('Unknown data block content type "%s"'%db_content_type)
+                db_ct_list = [(db_content_type, f_path)]
 
-            files = os.listdir(f_path) #FIXME: this is really sucks for huge count of files
-            for db_key in files:
-                if not all_data:
-                    try:
-                        in_range = self.__start <= long(db_key, 16) <= self.__end
-                        if foreign_only and in_range:
+            for dbct, f_path in db_ct_list:
+                files = os.listdir(f_path) #FIXME: this is really sucks for huge count of files
+                for db_key in files:
+                    if not all_data:
+                        try:
+                            in_range = self.__start <= long(db_key, 16) <= self.__end
+                            if foreign_only and in_range:
+                                continue
+                            if (not foreign_only) and (not in_range):
+                                continue
+                        except ValueError:
+                            logger.warning('invalid data block name "%s"'%db_key)
                             continue
-                        if (not foreign_only) and (not in_range):
-                            continue
-                    except ValueError:
-                        logger.warning('invalid data block name "%s"'%db_key)
-                        continue
 
-                yield db_key, f_path + db_key
+                    yield db_key, dbct, f_path + db_key
         except Exception, err:
             raise FSHashRangesException('Iterator over data blocks failed with error: %s'%err)
 
@@ -447,6 +276,7 @@ class FSMappedDHTRange:
 
     def get_free_size_percents(self):
         stat = os.statvfs(self.__range_path)
+        free = stat.f_bfree * stat.f_frsize
         return (stat.f_bavail * 100.) / stat.f_blocks
 
     def get_estimated_data_percents(self, add_size=0):
@@ -461,15 +291,9 @@ class FSMappedDHTRange:
         '''calculate data blocks size with content type db_content_type
         If db_content_type is None - return size of all stored data blocks
         '''
-        if db_content_type is None:
-            ct_list = self.__DBCT_LIST
-        else:
-            ct_list = [db_content_type]
-
         size = 0
-        for dbct in ct_list:
-            for key, path in self.iterator(dbct, all_data=(not only_in_range)):
-                size += self.__get_file_size(path)
+        for key, _, path in self.iterator(db_content_type, all_data=(not only_in_range)):
+            size += self.__get_file_size(path)
         return size
 
     def get_db_path(self, key, db_content_type, for_write=True):

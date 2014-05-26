@@ -15,7 +15,8 @@ from fabnet.core.constants import RC_OK, RC_ERROR, RC_PERMISSION_DENIED
 from fabnet.core.constants import NODE_ROLE
 
 from fabnet_dht.constants import RC_NO_DATA
-from fabnet_dht.fs_mapped_ranges import FSHashRangesPermissionDenied, FSHashRangesNoData 
+from fabnet_dht.fs_mapped_ranges import FSMappedDHTRange, FSHashRangesNoData, FSHashRangesPermissionDenied
+from fabnet_dht.data_block import DataBlock, ThreadSafeDataBlock
 
 class DeleteDataBlockOperation(OperationBase):
     ROLES = [NODE_ROLE]
@@ -29,19 +30,23 @@ class DeleteDataBlockOperation(OperationBase):
         @return object of FabnetPacketResponse
                 or None for disabling packet response to sender
         """
-        key = packet.parameters.get('key', None)
-        is_replica = packet.parameters.get('is_replica', False)
-        if key is None:
-            return FabnetPacketResponse(ret_code=RC_ERROR, \
-                    ret_message='Key is not found in request packet!')
-        carefully_delete = packet.parameters.get('carefully_delete', True)
-        user_id = packet.parameters.get('user_id', None) 
+        key = packet.str_get('key')
+        dbct = packet.str_get('dbct', FSMappedDHTRange.DBCT_MASTER)
+        user_id_hash = packet.str_get('user_id_hash', '') 
+        carefully_delete = packet.bool_get('carefully_delete', True)
 
         try:
-            path = self.operator.delete_data_block(key, is_replica, user_id, carefully_delete)
+            db_path = self.operator.get_db_path(key, dbct)
+            with DataBlock(db_path) as db:
+                if not db.exists():
+                    raise FSHashRangesNoData('No data found!')
+
+                if carefully_delete:
+                    db.get_header().match(user_id_hash=user_id_hash)
+
+                db.remove() #??? may be move to trash?
         except FSHashRangesNoData, err:
-            return FabnetPacketResponse(ret_code=RC_NO_DATA, \
-                    ret_message='no data: %s'%err)
+            return FabnetPacketResponse(ret_code=RC_NO_DATA, ret_message=str(err))
         except FSHashRangesPermissionDenied, err:
             return FabnetPacketResponse(ret_code=RC_PERMISSION_DENIED, \
                     ret_message='permission denied: %s'%err)

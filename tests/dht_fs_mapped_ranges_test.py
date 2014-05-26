@@ -41,7 +41,7 @@ class WriteThread(threading.Thread):
         for i in range(self.cnt):
             for i in range(100):
                 path = self.fs_ranges.get_db_path('%040x'%((i+1000)*10000), FSMappedDHTRange.DBCT_MASTER)
-                with ThreadSafedDataBlock(path) as db:
+                with ThreadSafeDataBlock(path) as db:
                     db.write(self.data)
 
 class ReadThread(threading.Thread):
@@ -58,7 +58,7 @@ class ReadThread(threading.Thread):
                     if self.stop_flag:
                         return
                     path = self.fs_ranges.get_db_path('%040x'%((i+1000)*10000), FSMappedDHTRange.DBCT_MASTER, for_write=False)
-                    db = ThreadSafedDataBlock(path)
+                    db = ThreadSafeDataBlock(path)
                     if not db.exists():
                         continue
 
@@ -78,7 +78,7 @@ class TestFSMappedRanges(unittest.TestCase):
         global TEST_FS_RANGE_DIR
         TEST_FS_RANGE_DIR = self._make_fake_hdd(TEST_FS_RANGE_DIR_NAME, 70*1024)
 
-    def _test99_destroy(self):
+    def test99_destroy(self):
         self._destroy_fake_hdd(TEST_FS_RANGE_DIR_NAME)
 
     def _make_fake_hdd(self, name, size, dev='/dev/loop0'):
@@ -167,14 +167,14 @@ class TestFSMappedRanges(unittest.TestCase):
         #iterate subranges
         start = long(START_RANGE_HASH, 16)
         end = 10500000
-        for key, path in ret_range.iterator(FSMappedDHTRange.DBCT_MASTER):
+        for key, dbct, path in ret_range.iterator(FSMappedDHTRange.DBCT_MASTER):
             self.assertTrue(start <= long(key, 16) <= end) 
 
-        for key, path in ret_range.iterator(FSMappedDHTRange.DBCT_MASTER, foreign_only=True):
+        for key, dbct, path in ret_range.iterator(FSMappedDHTRange.DBCT_MASTER, foreign_only=True):
             self.assertTrue((long(key, 16) > end) or (long(key, 16) < start)) 
 
         local = foreign = False
-        for key, path in ret_range.iterator(FSMappedDHTRange.DBCT_MASTER, all_data=True):
+        for key, dbct, path in ret_range.iterator(FSMappedDHTRange.DBCT_MASTER, all_data=True):
             if start <= long(key, 16) <= end:
                 local = True
             else:
@@ -184,7 +184,7 @@ class TestFSMappedRanges(unittest.TestCase):
 
         start = 10500000
         end = long(END_RANGE_HASH, 16)
-        for key, path in new_range.iterator(FSMappedDHTRange.DBCT_MASTER):
+        for key, dbct, path in new_range.iterator(FSMappedDHTRange.DBCT_MASTER):
             self.assertTrue(start <= long(key, 16) <= end) 
 
         fs_ranges.join_subranges()
@@ -204,7 +204,7 @@ class TestFSMappedRanges(unittest.TestCase):
                     self.assertTrue(data in [wd_data, wd1_data, wd2_data], data)
                 self.assertEqual(i, 299, db.read())
             
-        for key, path in fs_ranges.iterator(FSMappedDHTRange.DBCT_MASTER):
+        for key, dbct, path in fs_ranges.iterator(FSMappedDHTRange.DBCT_MASTER):
             check_db(path)
 
         size = fs_ranges.get_data_size()
@@ -229,14 +229,22 @@ class TestFSMappedRanges(unittest.TestCase):
         with self.assertRaises(FSHashRangesException):
             path = fs_ranges.get_db_path('testfile', FSMappedDHTRange.DBCT_TEMP)
 
-        for key, path in fs_ranges.iterator(FSMappedDHTRange.DBCT_MASTER):
+        for key, dbct, path in fs_ranges.iterator(FSMappedDHTRange.DBCT_MASTER):
             print '[free=%.2f%%] removing %s'%(fs_ranges.get_free_size_percents(), key)
             fs_ranges.remove_db(key, FSMappedDHTRange.DBCT_MASTER)
             try:
-                fs_ranges.get_db_path('testfile', FSMappedDHTRange.DBCT_TEMP)
+                path = fs_ranges.get_db_path('%040x'%10700, FSMappedDHTRange.DBCT_REPLICA)
+                with DataBlock(path) as db:
+                    db.write('test data')
                 break
             except FSHashRangesException:
                 pass
+
+        tmp_data = False
+        for key, dbct, path in fs_ranges.iterator():
+            if dbct == FSMappedDHTRange.DBCT_REPLICA and key == '%040x'%10700:
+                tmp_data = True
+        self.assertTrue(tmp_data)
 
         free_size_perc = fs_ranges.get_free_size_percents()
         self.assertTrue(free_size_perc >= 15, free_size_perc)
@@ -252,9 +260,9 @@ class TestFSMappedRanges(unittest.TestCase):
         extended_range.save_range()
         self.assertEqual(extended_range.get_start(), 0)
         self.assertEqual(extended_range.get_end(), long(END_RANGE_HASH, 16))
-        lr_start, lr_end = extended_range.get_last_range()
-        self.assertEqual(lr_start, long(START_RANGE_HASH, 16))
-        self.assertEqual(lr_end, long(END_RANGE_HASH, 16))
+        last = extended_range.get_last_range()
+        self.assertEqual(last.get_start(), long(START_RANGE_HASH, 16))
+        self.assertEqual(last.get_end(), long(END_RANGE_HASH, 16))
 
 
 

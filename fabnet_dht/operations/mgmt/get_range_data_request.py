@@ -47,7 +47,7 @@ class GetRangeDataRequestOperation(OperationBase):
                 or None for disabling packet resending
         """
         if packet.ret_code != RC_OK:
-            logger.info('Trying select other hash range...')
+            logger.info('GetRangeData failed "%s"! Trying select other hash range...'%packet.ret_message)
             self.operator.start_as_dht_member()
         else:
             self.operator.set_status_to_normalwork(True) #with save_range=True
