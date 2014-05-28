@@ -168,11 +168,18 @@ class DataBlock:
         self.__link_idx = 0
         self.__cur_seek = 0
 
-    def __open(self):
+    def __open(self, lock_flag=fcntl.LOCK_SH):
         self.__fd = os.open(self.__path, os.O_RDWR | os.O_CREAT)
-        fcntl.lockf(self.__fd, fcntl.LOCK_SH)
+        fcntl.lockf(self.__fd, lock_flag)
         if self.NEED_THRD_LOCK:
             self.__thread_lock(self.__path, shared=True)
+
+    def try_block_for_read(self):
+        try:
+            self.__open(fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except IOError:
+            return False
+        return True
 
     def exists(self):
         '''return True if data block file is already exists'''

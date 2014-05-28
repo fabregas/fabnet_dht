@@ -9,7 +9,9 @@ Copyright (C) 2012 Konstantin Andrusenko
 @author Konstantin Andrusenko
 @date September 26, 2012
 """
+import os
 import hashlib
+import tempfile
 
 from fabnet.core.operation_base import  OperationBase
 from fabnet.core.fri_base import FabnetPacketResponse
@@ -19,7 +21,7 @@ from fabnet_dht.constants import RC_OLD_DATA, RC_NO_FREE_SPACE, RC_ALREADY_EXIST
 from fabnet_dht.data_block import DataBlockHeader
 from fabnet_dht.key_utils import KeyUtils
 from fabnet_dht.data_block import DataBlock, ThreadSafeDataBlock
-from fabnet_dht.fs_mapped_ranges import FSHashRangesOldDataDetected, \
+from fabnet_dht.fs_mapped_ranges import FSMappedDHTRange, FSHashRangesOldDataDetected, \
                     FSHashRangesNoFreeSpace, FSHashRangesPermissionDenied
 
 class PutDataBlockOperation(OperationBase):
@@ -50,6 +52,7 @@ class PutDataBlockOperation(OperationBase):
 
         key = KeyUtils.to_hex(key)
         data = packet.binary_data
+        tmp = None
         try:
             db_path = self.operator.get_db_path(key, dbct)
 
@@ -59,17 +62,25 @@ class PutDataBlockOperation(OperationBase):
                     if init_block:
                         return FabnetPacketResponse(ret_code=RC_ALREADY_EXISTS, ret_message='Already exists!')
 
-                    if carefully_save:
+                    if dbct in (FSMappedDHTRange.DBCT_MASTER, FSMappedDHTRange.DBCT_REPLICA) and carefully_save:
                         db.block()
                         db.get_header().match(user_id_hash=user_id_hash, stored_dt=stored_unixtime)
 
-                db.write(data, iterate=True)
+                if dbct in (FSMappedDHTRange.DBCT_MD_MASTER, FSMappedDHTRange.DBCT_MD_REPLICA):
+                    tmp = tempfile.NamedTemporaryFile(suffix='.zip')
+                    with DataBlock(tmp.name) as tmp_db:
+                        tmp_db.write(data, iterate=True)
+                    os.system('rm -rf %s && mkdir -p %s && cd %s && unzip %s'%(db_path, db_path, db_path, tmp.name))
+                else:
+                    db.write(data, iterate=True)
         except FSHashRangesOldDataDetected, err:
             return FabnetPacketResponse(ret_code=RC_OLD_DATA, ret_message=str(err))
         except FSHashRangesNoFreeSpace, err:
             return FabnetPacketResponse(ret_code=RC_NO_FREE_SPACE, ret_message=str(err))
         except FSHashRangesPermissionDenied, err:
             return FabnetPacketResponse(ret_code=RC_PERMISSION_DENIED, ret_message=str(err))
+        finally:
+            if tmp: tmp.close()
 
         return FabnetPacketResponse()
 

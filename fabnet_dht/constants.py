@@ -14,6 +14,8 @@ RC_OLD_DATA = 325
 RC_INVALID_DATA = 326
 RC_NO_FREE_SPACE = 327
 RC_ALREADY_EXISTS = 330
+RC_MD_NOFREESPACE = 400
+RC_MD_NOTINIT= 401
 
 MIN_REPLICA_COUNT = 2
 
@@ -31,6 +33,7 @@ DEFAULT_DHT_CONFIG = { 'WAIT_RANGE_TIMEOUT': 120, #if no ranges found for init D
                         'WAIT_FILE_MD_TIMEDELTA': 10,
                         'WAIT_DHT_TABLE_UPDATE': 3,
                         'RANGES_TABLE_FLAPPING_TIMEOUT': 3,
+                        'FLUSH_MD_CACHE_TIMEOUT': 600,
                         'DHT_STOP_TIMEOUT': 2} #wait sending messages from agents threads
 
 

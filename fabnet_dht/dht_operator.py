@@ -15,6 +15,8 @@ import threading
 import random
 import traceback
 import shutil
+import tempfile
+from datetime import datetime
 
 from fabnet.core.operator import Operator
 
@@ -28,6 +30,8 @@ from fabnet_dht.constants import DS_INITIALIZE, DS_DESTROYING, DS_NORMALWORK, \
             DEFAULT_DHT_CONFIG, MIN_KEY, MAX_KEY, RC_OLD_DATA, RC_NO_FREE_SPACE, DS_PREINIT
 from fabnet_dht.fs_mapped_ranges import FSMappedDHTRange
 from fabnet_dht.data_block import DataBlock, ThreadSafeDataBlock
+from fabnet_dht.user_metadata import MetadataCache
+
 from fabnet_dht.operations.mgmt.get_range_data_request import GetRangeDataRequestOperation
 from fabnet_dht.operations.mgmt.get_ranges_table import GetRangesTableOperation
 from fabnet_dht.operations.mgmt.split_range_cancel import SplitRangeCancelOperation
@@ -44,6 +48,9 @@ from fabnet_dht.operations.data_access.delete_data_block import DeleteDataBlockO
 from fabnet_dht.operations.data_access.client_delete import ClientDeleteOperation
 from fabnet_dht.operations.data_access.check_data_block import CheckDataBlockOperation
 from fabnet_dht.operations.data_access.repair_data_blocks import RepairDataBlocksOperation
+from fabnet_dht.operations.data_access.update_user_profile import UpdateUserProfileOperation
+from fabnet_dht.operations.data_access.update_metadata import UpdateMetadataOperation
+from fabnet_dht.operations.data_access.restore_metadata import RestoreMetadataOperation
 from fabnet_dht.hash_ranges_table import HashRange, HashRangesTable
 
 OPERLIST = [GetRangeDataRequestOperation, GetRangesTableOperation,
@@ -52,7 +59,8 @@ OPERLIST = [GetRangeDataRequestOperation, GetRangesTableOperation,
              SplitRangeRequestOperation, PullSubrangeRequestOperation,
              UpdateHashRangeTableOperation, CheckHashRangeTableOperation,
              RepairDataBlocksOperation, GetKeysInfoOperation,
-             ClientPutOperation, DeleteDataBlockOperation, ClientDeleteOperation]
+             ClientPutOperation, DeleteDataBlockOperation, ClientDeleteOperation,
+             UpdateUserProfileOperation, UpdateMetadataOperation, RestoreMetadataOperation]
 
 class DHTOperator(Operator):
     def __init__(self, self_address, home_dir='/tmp/', key_storage=None, \
@@ -70,6 +78,7 @@ class DHTOperator(Operator):
         if not os.path.exists(self.save_path):
             os.mkdir(self.save_path)
 
+        self.__usr_md_cache = MetadataCache()
         self.__split_requests_cache = []
         self.__dht_range = FSMappedDHTRange.discovery_range(self.save_path)
         self.ranges_table.append(self.__dht_range.get_start(), self.__dht_range.get_end(), self.self_address)
@@ -85,6 +94,12 @@ class DHTOperator(Operator):
         self.__monitor_dht_ranges.start()
 
         self.status = DS_PREINIT
+    
+    def flush_md_cache(self):
+        self.__usr_md_cache.destroy()
+
+    def reinit_metadata(self, db_path):
+        self.__usr_md_cache.close_md(db_path)
 
     def get_status(self):
         return self.status
@@ -139,6 +154,7 @@ class DHTOperator(Operator):
         time.sleep(float(Config.DHT_STOP_TIMEOUT))
         self.__check_hash_table_thread.join()
         self.__monitor_dht_ranges.join()
+        self.__usr_md_cache.destroy()
 
     def __get_next_max_range(self):
         max_range = None
@@ -506,18 +522,7 @@ class DHTOperator(Operator):
         ret_range, new_range = subranges
         try:
             self.__monitor_dht_ranges.force()
-            '''
-            logger.debug('Starting subrange data transfering to %s'% node_address)
-            for key, data in ret_range.iterator():
-                params = {'key': key, 'carefully_save': True}
-                req = FabnetPacketRequest(method='PutDataBlock', \
-                                    sender=self.self_address, binary_data=data, sync=True,
-                                    parameters=params)
 
-                resp = self.call_node(node_address, req)
-                if resp.ret_code:
-                    raise Exception('Init PutDataBlock operation on %s error. Details: %s'%(node_address, resp.ret_message))
-            '''
             self.update_dht_range(new_range)
             self.set_status_to_normalwork(save_range=True)
         except Exception, err:
@@ -533,7 +538,8 @@ class DHTOperator(Operator):
                     parameters={'append': append_lst, 'remove': rm_lst})
         self.call_network(req)
 
-
+    def user_metadata_call(self, method, *args, **kv_args):
+        return self.__usr_md_cache.call(method, *args, **kv_args)
 
 
 
@@ -546,7 +552,13 @@ class CheckLocalHashTableThread(threading.Thread):
     def run(self):
         logger.info('Thread started!')
 
+        t0 = datetime.now()
         while not self.stopped.is_set():
+            dt = datetime.now() - t0
+            if dt.total_seconds() > float(Config.FLUSH_MD_CACHE_TIMEOUT):
+                self.operator.flush_md_cache()
+                t0 = datetime.now()
+
             try:
                 if not self.operator.check_range_table():
                     logger.info('Waiting neighbours...')
@@ -677,19 +689,33 @@ class MonitorDHTRanges(threading.Thread):
             logger.debug('No range found for reservation key %s'%key)
             return False
 
-        if k_range.node_address in self.__full_nodes:
-            logger.info('Node %s does not have free space. Skipping put data block...'%k_range.node_address)
-            return False
+        tmp = None
+        if os.path.isdir(path):
+            tmp = tempfile.NamedTemporaryFile(suffix='.zip')
+            os.system('rm -f %s && cd %s && zip -r %s *'%(tmp.name, path, tmp.name))
+            path = tmp.name
 
-        if k_range.node_address == self.operator.self_address:
-            logger.info('Skip moving to local node')
-            return False
+        try:
+            db = ThreadSafeDataBlock(path)
+            if not db.try_block_for_read():
+                logger.info('DB %s is locked. skip it...'%path)
+                return False
 
-        params = {'key': key, 'dbct': dbct, 'carefully_save': True}
-        req = FabnetPacketRequest(method='PutDataBlock', sender=self.operator.self_address, \
-                parameters=params, binary_data=ThreadSafeDataBlock(path), sync=True)
+            if k_range.node_address in self.__full_nodes:
+                logger.info('Node %s does not have free space. Skipping put data block...'%k_range.node_address)
+                return False
 
-        resp = self.operator.call_node(k_range.node_address, req)
+            if k_range.node_address == self.operator.self_address:
+                logger.info('Skip moving to local node')
+                return False
+
+            params = {'key': key, 'dbct': dbct, 'init_block': False, 'carefully_save': True}
+            req = FabnetPacketRequest(method='PutDataBlock', sender=self.operator.self_address, \
+                    parameters=params, binary_data=ThreadSafeDataBlock(path), sync=True)
+
+            resp = self.operator.call_node(k_range.node_address, req)
+        finally:
+            if tmp: tmp.close()
 
         if resp.ret_code == RC_NO_FREE_SPACE:
             self.__full_nodes.append(k_range.node_address)

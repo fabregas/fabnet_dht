@@ -8,13 +8,13 @@ class TestDHTInitProcedure(unittest.TestCase):
         servers = []
         try:
             N = self.NODES
-            server = TestServerThread(N[0][0], N[0][1], config={'MAX_USED_SIZE_PERCENTS': 99},  ks_path=N[0][2])
+            server = TestServerThread(N[0][0], N[0][1], config={'MAX_USED_SIZE_PERCENTS': 99, 'FLUSH_MD_CACHE_TIMEOUT': 0.2},  ks_path=N[0][2])
             servers.append(server)
             server.start()
             time.sleep(1)
 
             server = TestServerThread(N[1][0], N[1][1], neighbour='127.0.0.1:%s'%N[0][0], \
-                        config={'MAX_USED_SIZE_PERCENTS': 99}, ks_path=N[1][2])
+                    config={'MAX_USED_SIZE_PERCENTS': 99, 'FLUSH_MD_CACHE_TIMEOUT': 0.2}, ks_path=N[1][2])
             servers.append(server)
             server.start()
 
@@ -40,11 +40,35 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.assertEqual(hr.start, MAX_KEY/2+1)
             self.assertEqual(hr.end, MAX_KEY)
 
+            self.UMetadata_test(servers)
             self.PutDataBlock_test(servers)
             self.PutGet_test(servers)
         finally:
             for server in servers:
                 server.stop()
+
+    def UMetadata_test(self, servers, need_restore_test=True):
+        add_list = [('/test.out', [('%040x'%23124, 2, 22223), ('%040x'%542322, 2, 3333)])]
+        KEY = MAX_KEY - 333
+        ret = servers[1].update_md('%040x'%KEY, add_list, rm_list=[])
+        self.assertEqual(ret.ret_code, RC_MD_NOTINIT, ret.ret_message)
+        
+        ret = servers[1].update_user_md('%040x'%KEY, 100500)
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+
+        ret = servers[1].update_md('%040x'%KEY, add_list, rm_list=[])
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+
+        path = os.path.join(servers[1].home_dir, 'dht_range', FSMappedDHTRange.DBCT_MD_MASTER, '%040x'%KEY)
+        self.assertTrue(os.path.exists(path), path)
+        if need_restore_test:
+            os.system('rm -rf %s'%path)
+            time.sleep(0.5)
+
+        add_list = [('/test2.out', [('%040x'%5426662, 3, 133)])]
+        ret = servers[1].update_md('%040x'%KEY, add_list, rm_list=[])
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+        
 
     def PutDataBlock_test(self, servers):
         r_data = '12323423r3fdjvnoi4fhruwefwwfw'*100
@@ -316,7 +340,7 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.assertEqual(node86_stat['DHTInfo']['free_size_percents'] < 10, True, node86_stat['DHTInfo']['free_size_percents'] )
             self.assertEqual(node87_stat['DHTInfo']['free_size_percents'] > 90, True)
             print node86_stat['DHTInfo']['free_size_percents'], node87_stat['DHTInfo']['free_size_percents'], '==============='
-            time.sleep(2.5)
+            time.sleep(4)
             node86_stat = server.get_stat()
             node87_stat = server1.get_stat()
             print node86_stat['DHTInfo']['free_size_percents'], node87_stat['DHTInfo']['free_size_percents'], '==============='
@@ -363,6 +387,8 @@ class TestDHTInitProcedure(unittest.TestCase):
             ret = server1.put(data)
             self.assertEqual(ret.ret_code, 0, ret.ret_message)
             data_key2 = ret.ret_parameters['key']
+            
+            self.UMetadata_test(servers, need_restore_test=False)
 
             time.sleep(.2)
             client = FriClient(servers[0].ks)
@@ -392,7 +418,7 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.assertTrue(stat%cnt86 in event86['event_message'], event86['event_message'])
 
             self.assertEqual(event87['event_type'], ET_INFO)
-            cnt87 = len(os.listdir(server1.get_range_dir())) + len(os.listdir(server1.get_replicas_dir()))
+            cnt87 = len(os.listdir(server1.get_range_dir())) + len(os.listdir(server1.get_replicas_dir())) + 1
             self.assertTrue(stat%cnt87 in event87['event_message'], event87['event_message'])
 
             node86_stat = server.get_stat()
@@ -422,10 +448,13 @@ class TestDHTInitProcedure(unittest.TestCase):
                     event87 = event
             self.assertEqual(event87['event_type'], ET_INFO)
             stat_rep = 'processed_local_blocks=%i, invalid_local_blocks=0, repaired_foreign_blocks=%i, failed_repair_foreign_blocks=0'
-            self.assertTrue(stat_rep%(cnt87, cnt86) in event87['event_message'], event87['event_message'])
+            self.assertTrue(stat_rep%(cnt87, cnt86+1) in event87['event_message'], event87['event_message'])
 
             open(os.path.join(server1.get_range_dir(), data_key), 'wr').write('wrong data')
             open(os.path.join(server1.get_range_dir(), data_key2), 'ar').write('wrong data')
+
+            server1.operator.user_metadata_call(os.path.join(server1.home_dir, \
+                    'dht_range/mmd/fffffffffffffffffffffffffffffffffffffeb2'), 'remove_path', '/test2.out')
 
             time.sleep(.2)
             packet_obj = FabnetPacketRequest(method='RepairDataBlocks', is_multicast=True, parameters={})
@@ -447,7 +476,7 @@ class TestDHTInitProcedure(unittest.TestCase):
                     event87 = event
 
             stat_rep = 'processed_local_blocks=%i, invalid_local_blocks=%i, repaired_foreign_blocks=%i, failed_repair_foreign_blocks=0'
-            self.assertTrue(stat_rep%(cnt87+cnt86, 1, 2) in event87['event_message'], event87['event_message'])
+            self.assertTrue(stat_rep%(cnt87+cnt86, 1, 4) in event87['event_message'], event87['event_message'])
 
         finally:
             for server in servers:

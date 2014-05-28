@@ -208,7 +208,19 @@ class TestServerThread(threading.Thread):
         ret_packet = client.call_sync('127.0.0.1:%s'%self.port, packet_obj) 
         return ret_packet
 
+    def update_user_md(self, user_id_hash, storage_size):
+        client = FriClient(self.ks)
+        params = {'user_id_hash': user_id_hash, 'storage_size': storage_size}
+        packet_obj = FabnetPacketRequest(method='UpdateUserProfile', parameters=params)
+        ret_packet = client.call_sync('127.0.0.1:%s'%self.port, packet_obj) 
+        return ret_packet
 
+    def update_md(self, user_id_hash, add_list, rm_list=[]):
+        client = FriClient(self.ks)
+        params = {'user_id_hash': user_id_hash, 'add_list': add_list, 'rm_list': rm_list}
+        packet_obj = FabnetPacketRequest(method='UpdateMetadata', parameters=params)
+        ret_packet = client.call_sync('127.0.0.1:%s'%self.port, packet_obj) 
+        return ret_packet
 
 
 

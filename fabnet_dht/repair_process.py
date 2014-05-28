@@ -11,12 +11,13 @@ Copyright (C) 2013 Konstantin Andrusenko
 """
 import os
 import hashlib
+import tempfile
 
 from fabnet.utils.logger import oper_logger as logger
 from fabnet.core.constants import RC_OK, RC_ERROR
 from fabnet.core.fri_base import FabnetPacketRequest, FabnetPacketResponse
 
-from fabnet_dht.constants import RC_NO_DATA, RC_INVALID_DATA, RC_OLD_DATA
+from fabnet_dht.constants import RC_NO_DATA, RC_INVALID_DATA, RC_OLD_DATA, MIN_REPLICA_COUNT
 from fabnet_dht.key_utils import KeyUtils
 from fabnet_dht.data_block import DataBlock, ThreadSafeDataBlock
 from fabnet_dht.fs_mapped_ranges import FSMappedDHTRange
@@ -71,6 +72,14 @@ class RepairProcess:
             self.__process_data_block(key, path, dbct)
         logger.info('[RepairDataBlocks] DHT range is processed!')
 
+        logger.info('[RepairDataBlocks] Processing users metadata range...')
+        for key, dbct, path in dht_range.iterator(FSMappedDHTRange.DBCT_MD_MASTER):
+            logger.info('PROCESS %s %s'%(dbct, path))
+            if (key, dbct) in self.__local_moved:
+                continue
+            self.__process_md_block(key, path)
+        logger.info('[RepairDataBlocks] Users metadata range is processed!')
+
         return self.__get_stat()
 
     def __process_data_block(self, key, path, dbct):
@@ -101,6 +110,43 @@ class RepairProcess:
                 if self._in_check_range(repl_key):
                     self.__check_data_block(key, db, dbct, repl_key, \
                             header, FSMappedDHTRange.DBCT_REPLICA)
+
+    def __process_md_block(self, check_key, path):
+        self.__processed_local_blocks += 1
+        data_keys = KeyUtils.get_all_keys(check_key, MIN_REPLICA_COUNT)
+
+        for repl_key in data_keys[1:]:
+            if not self._in_check_range(repl_key):
+                continue
+
+            long_key = self.__validate_key(repl_key)
+            range_obj = self.operator.ranges_table.find(long_key)
+            checksum = self.operator.user_metadata_call(path, 'get_checksum')
+            params = {'key': repl_key, 'checksum': checksum, 'dbct': FSMappedDHTRange.DBCT_MD_REPLICA}
+            req = FabnetPacketRequest(method='CheckDataBlock', sender=self.operator.self_address, sync=True, parameters=params)
+            resp = self.operator.call_node(range_obj.node_address, req)
+            if resp.ret_code == RC_OK:
+                return
+            if resp.ret_code not in (RC_NO_DATA, RC_INVALID_DATA):
+                self.__failed_repair_foreign_blocks += 1
+                logger.error('CheckDataBlock failed at %s. Details: %s'%(range_obj.node_address, resp.ret_message))
+                return
+
+            logger.info('Invalid metadata for user=%s at %s ([%s]%s). Sending valid block...'%\
+                (check_key, range_obj.node_address, resp.ret_code, resp.ret_message))
+
+            tmp = tempfile.NamedTemporaryFile(suffix='.zip')
+            os.system('rm -f %s && cd %s && zip -r %s *'%(tmp.name, path, tmp.name))
+            params = {'key': repl_key, 'dbct': FSMappedDHTRange.DBCT_MD_REPLICA, 'user_id_hash': check_key}
+            req = FabnetPacketRequest(method='PutDataBlock', sender=self.operator.self_address, sync=True, \
+                                        parameters=params, binary_data=ThreadSafeDataBlock(tmp.name))
+            resp = self.operator.call_node(range_obj.node_address, req)
+            tmp.close()
+            if resp.ret_code != RC_OK:
+                self.__failed_repair_foreign_blocks += 1
+                logger.error('PutDataBlock failed on %s. Details: %s'%(range_obj.node_address, resp.ret_message))
+            else:
+                self.__repaired_foreign_blocks += 1
 
     def __validate_key(self, key):
         try:

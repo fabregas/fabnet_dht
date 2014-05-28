@@ -9,6 +9,7 @@ Copyright (C) 2012 Konstantin Andrusenko
 @author Konstantin Andrusenko
 @date November 10, 2012
 """
+import os
 from fabnet.core.operation_base import  OperationBase
 from fabnet.core.fri_base import FabnetPacketResponse
 from fabnet.core.constants import RC_OK, RC_ERROR
@@ -37,10 +38,20 @@ class CheckDataBlockOperation(OperationBase):
         dbct = packet.str_get('dbct', FSMappedDHTRange.DBCT_MASTER)
 
         db_path = self.operator.get_db_path(key, dbct)
+
+        #metadata check
+        if dbct in (FSMappedDHTRange.DBCT_MD_MASTER, FSMappedDHTRange.DBCT_MD_REPLICA): 
+            if not os.path.exists(db_path):
+                return FabnetPacketResponse(ret_code=RC_NO_DATA, ret_message='No data found!')
+            c_checksum = self.operator.user_metadata_call(db_path, 'get_checksum')
+            if checksum != c_checksum:
+                return FabnetPacketResponse(ret_code=RC_INVALID_DATA, ret_message='mistmatch checksum')
+            return FabnetPacketResponse()
+
+        #db check
         with DataBlock(db_path) as db:
             if not db.exists():
                 return FabnetPacketResponse(ret_code=RC_NO_DATA, ret_message='No data found!')
-
             try:
                 DataBlockHeader.check_raw_data(db, checksum)
             except Exception, err:
