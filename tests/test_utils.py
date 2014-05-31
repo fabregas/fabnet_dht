@@ -222,6 +222,28 @@ class TestServerThread(threading.Thread):
         ret_packet = client.call_sync('127.0.0.1:%s'%self.port, packet_obj) 
         return ret_packet
 
+    def put_object_part(self, obj_path, data, seek=0, wait_writes=3, init_block=True, client_ks=None, key=None, replica_count=2):
+        if not client_ks:
+            client_ks = self.ks
+        client = FriClient(client_ks)
+
+        params = {'wait_writes_count': wait_writes, 'replica_count': replica_count, \
+                'init_block': init_block, 'key': key, 'obj_path': obj_path, 'seek': seek}
+        data = RamBasedBinaryData(data, 20)
+        packet_obj = FabnetPacketRequest(method='PutObjectPart', parameters=params, binary_data=data, sync=True)
+        #print '========SENDING DATA BLOCK %s (%s chunks)'%(packet_obj, data.chunks_count())
+
+        ret_packet = client.call_sync('127.0.0.1:%s'%self.port, packet_obj)
+        #print '========SENDED DATA BLOCK'
+        return ret_packet
+
+    def get_object_info(self, obj_path, client_ks, req_user_info=True):
+        params = {'obj_path': obj_path, 'req_user_info': req_user_info}
+        req = FabnetPacketRequest(method='GetObjectInfo', parameters=params)
+
+        client = FriClient(client_ks)
+        resp = client.call_sync('127.0.0.1:%s'%self.port, req)
+        return resp
 
 
 

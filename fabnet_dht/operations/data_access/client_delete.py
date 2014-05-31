@@ -42,7 +42,11 @@ class ClientDeleteOperation(OperationBase):
 
         keys = KeyUtils.generate_new_keys(self.node_name, replica_count, prime_key=key)
         errors = []
-        user_id_hash = hashlib.sha1(str(packet.user_id)).hexdigest()
+        if packet.role == NODE_ROLE:
+            user_id_hash = packet.str_get('user_id_hash', '')
+        else:
+            user_id_hash = hashlib.sha1(str(packet.user_id)).hexdigest()
+
         for i, key in enumerate(keys):
             cur_dbct = FSMappedDHTRange.DBCT_MASTER if i == 0 else FSMappedDHTRange.DBCT_REPLICA
             h_range = self.operator.find_range(key)

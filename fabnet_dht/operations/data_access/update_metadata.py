@@ -91,7 +91,7 @@ class UpdateMetadataOperation(OperationBase):
         for f_path, dbs in add_list:
             dbs_ol = []
             for db in dbs:
-                dbs_ol.append(MDDataBlockInfo(db[0], db[1], db[2]))
+                dbs_ol.append(MDDataBlockInfo(db[0], db[1], db[2], db[3]))
             self.operator.user_metadata_call(db_path, 'update_path', f_path, dbs_ol)
 
         if not key:

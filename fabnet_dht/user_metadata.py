@@ -115,25 +115,30 @@ class MDItemValue:
 
 
 class MDDataBlockInfo:
-    STRUCT_FMT = '<20sBL'
+    STRUCT_FMT = '<20sBLL'
     REC_LEN = struct.calcsize(STRUCT_FMT)
 
-    def __init__(self, db_key, replica_count, size):
+    def __init__(self, db_key, replica_count, seek, size):
         self.db_key = db_key
         self.replica_count = replica_count
         self.size = size
+        self.seek = seek
 
     def __repr__(self):
-        return '[%s][%s][%s]'%(self.db_key, self.replica_count, self.size)
+        return '[%s][%s][%s][%s]'%(self.db_key, self.replica_count, self.seek, self.size)
 
     def pack(self):
         return struct.pack(self.STRUCT_FMT, self.db_key.decode('hex'), \
-                        self.replica_count, self.size)
+                        self.replica_count, self.seek, self.size)
 
+    def to_dict(self):
+        return {'db_key': self.db_key, 'replica_count': self.replica_count, \
+                'size': self.size, 'seek': self.seek}
+    
     @classmethod
     def unpack(cls, raw):
-        db_key, replica_count, size = struct.unpack(cls.STRUCT_FMT, raw)
-        return MDDataBlockInfo(db_key.encode('hex'), replica_count, size)
+        db_key, replica_count, seek, size = struct.unpack(cls.STRUCT_FMT, raw)
+        return MDDataBlockInfo(db_key.encode('hex'), replica_count, seek, size)
 
 
 class MDFileContent:
@@ -169,6 +174,12 @@ class PathInfo:
 
     def add_child(self, child):
         self.children.append(child)
+
+    def to_dict(self):
+        children = []
+        for child in self.children:
+            children.append(child.to_dict())
+        return {'name': self.name, 'type': self.path_type, 'children': children}
 
     def __repr__(self):
         ret = 'path: %s, path_type: %s, size: %s'%(self.name, self.path_type, self.size)
@@ -329,7 +340,6 @@ class UserMetadata:
         elif user_info.storage_size < (user_info.used_size + size):
             raise MDNoFreeSpace('No free user space!')
 
-
         if path.endswith('/'): path = path[:-1]
         item = self.__find(path)
         if item is None:
@@ -360,7 +370,6 @@ class UserMetadata:
                     size += new_db.size * (new_db.replica_count + 1)
                     for_app.append(new_db)
 
-            user_info.used_size
             content.data_blocks += for_app
             val.content = content.pack()
             self.__db[key.pack()] = val.pack()

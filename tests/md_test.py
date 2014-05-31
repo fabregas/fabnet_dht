@@ -23,7 +23,7 @@ class TestThread(threading.Thread):
         for i in xrange(self.CNT):
             dblen = random.randint(10, 10000000) 
             MAP[i] = dblen
-            self.md_cache.call(TEST_MD_PATH, 'update_path', '/test/test_file_%s'%i, [MDDataBlockInfo(hashlib.sha1(str(dblen)).hexdigest(), 2, dblen)])
+            self.md_cache.call(TEST_MD_PATH, 'update_path', '/test/test_file_%s'%i, [MDDataBlockInfo(hashlib.sha1(str(dblen)).hexdigest(), 2, 0, dblen)])
 
         for i in xrange(self.CNT):
 
@@ -85,9 +85,9 @@ class TestUserMetadata(unittest.TestCase):
             self.assertEqual(user_info.used_size, 0)
 
             um.update_path('/test/test_file.out', [])
-            um.update_path('/test/test_file.out', [MDDataBlockInfo(hashlib.sha1('2rf3ef3ef').hexdigest(), 2, 23422)])
-            um.update_path('/test/test_file.out', [MDDataBlockInfo(hashlib.sha1('23ffef').hexdigest(), 2, 1003428)])
-            um.update_path('/test/test_file_2.out', [MDDataBlockInfo(hashlib.sha1('sssssssssssef').hexdigest(), 3, 100500)])
+            um.update_path('/test/test_file.out', [MDDataBlockInfo(hashlib.sha1('2rf3ef3ef').hexdigest(), 2, 0, 23422)])
+            um.update_path('/test/test_file.out', [MDDataBlockInfo(hashlib.sha1('23ffef').hexdigest(), 2, 23422, 1003428)])
+            um.update_path('/test/test_file_2.out', [MDDataBlockInfo(hashlib.sha1('sssssssssssef').hexdigest(), 3, 0, 100500)])
             p_info = um.get_path_info('/test/test_file.out')
             self.assertEqual(p_info.size, 1003428+23422)
 
@@ -161,16 +161,16 @@ class TestUserMetadata(unittest.TestCase):
             user_id_hash = hashlib.sha1('fabregas').hexdigest()
             um.update_user_info(UserInfo(user_id_hash, 1024, 0, 522))
 
-            um.update_path('/test_file.out', [MDDataBlockInfo(hashlib.sha1('2rf3ef3ef').hexdigest(), 2, 333)])
+            um.update_path('/test_file.out', [MDDataBlockInfo(hashlib.sha1('2rf3ef3ef').hexdigest(), 2, 0, 333)])
             with self.assertRaises(MDNoFreeSpace):
-                um.update_path('/test_file.out', [MDDataBlockInfo(hashlib.sha1('asdffff3ef3ef').hexdigest(), 1, 33)])
+                um.update_path('/test_file.out', [MDDataBlockInfo(hashlib.sha1('asdffff3ef3ef').hexdigest(), 1, 0, 33)])
 
             um.add_user_storage_size(1000)
             user_info = um.get_user_info()
             self.assertEqual(user_info.user_id_hash, user_id_hash)
             self.assertEqual(user_info.used_size, 333*3)
             self.assertEqual(user_info.storage_size, 2024)
-            um.update_path('/test_file.out', [MDDataBlockInfo(hashlib.sha1('asdffff3ef3ef').hexdigest(), 1, 33)])
+            um.update_path('/test_file.out', [MDDataBlockInfo(hashlib.sha1('asdffff3ef3ef').hexdigest(), 1, 0, 33)])
         finally:
             um.close()
 

@@ -53,11 +53,14 @@ class UpdateUserProfileOperation(OperationBase):
         replica_count = packet.int_get('md_replica_count', MIN_REPLICA_COUNT)
         storage_size = packet.int_get('storage_size')
         bin_flags = packet.int_get('bin_flags', 0)
-        only_local_save = packet.bool_get('only_local_save', False)
+        save_key = packet.str_get('save_key', '')
 
         keys = KeyUtils.get_all_keys(user_id_hash, replica_count)
         saved_cnt = 0
         for i, key in enumerate(keys):
+            if save_key and key != save_key:
+                continue
+
             cur_dbct = FSMappedDHTRange.DBCT_MD_MASTER if i == 0 else FSMappedDHTRange.DBCT_MD_REPLICA
             h_range = self.operator.find_range(key)
             if not h_range:
@@ -69,11 +72,8 @@ class UpdateUserProfileOperation(OperationBase):
                 saved_cnt += 1
                 continue
 
-            if only_local_save:
-                continue
-
             params = copy.copy(packet.parameters)
-            params['only_local_save'] = True
+            params['save_key'] = key
             resp = self._init_operation(node_address, 'UpdateUserProfile', params, sync=True)
             if resp.ret_code != RC_OK:
                 return FabnetPacketResponse(ret_code=RC_ERROR, ret_message='Update user profile error at %s: %s'% \
@@ -81,7 +81,7 @@ class UpdateUserProfileOperation(OperationBase):
 
             saved_cnt += 1
 
-        if only_local_save and saved_cnt == 0:
+        if save_key and saved_cnt == 0:
             return FabnetPacketResponse(ret_code=RC_ERROR, ret_message='No local key for user_id=%s found!'%user_id)
 
         return FabnetPacketResponse()

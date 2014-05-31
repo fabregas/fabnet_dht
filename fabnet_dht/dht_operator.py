@@ -51,6 +51,8 @@ from fabnet_dht.operations.data_access.repair_data_blocks import RepairDataBlock
 from fabnet_dht.operations.data_access.update_user_profile import UpdateUserProfileOperation
 from fabnet_dht.operations.data_access.update_metadata import UpdateMetadataOperation
 from fabnet_dht.operations.data_access.restore_metadata import RestoreMetadataOperation
+from fabnet_dht.operations.data_access.put_object_part import PutObjectPartOperation
+from fabnet_dht.operations.data_access.get_object_info import GetObjectInfoOperation
 from fabnet_dht.hash_ranges_table import HashRange, HashRangesTable
 
 OPERLIST = [GetRangeDataRequestOperation, GetRangesTableOperation,
@@ -60,7 +62,8 @@ OPERLIST = [GetRangeDataRequestOperation, GetRangesTableOperation,
              UpdateHashRangeTableOperation, CheckHashRangeTableOperation,
              RepairDataBlocksOperation, GetKeysInfoOperation,
              ClientPutOperation, DeleteDataBlockOperation, ClientDeleteOperation,
-             UpdateUserProfileOperation, UpdateMetadataOperation, RestoreMetadataOperation]
+             UpdateUserProfileOperation, UpdateMetadataOperation, RestoreMetadataOperation,
+             PutObjectPartOperation, GetObjectInfoOperation]
 
 class DHTOperator(Operator):
     def __init__(self, self_address, home_dir='/tmp/', key_storage=None, \

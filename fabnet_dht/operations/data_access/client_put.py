@@ -13,7 +13,7 @@ import os
 import hashlib
 import shutil
 from fabnet.core.operation_base import  OperationBase
-from fabnet.core.fri_base import FabnetPacketResponse, BinaryDataPointer
+from fabnet.core.fri_base import FabnetPacketResponse, BinaryDataPointer, FabnetPacketRequest
 from fabnet.core.constants import RC_OK, RC_ERROR
 from fabnet.utils.logger import oper_logger as logger
 from fabnet.core.constants import NODE_ROLE, CLIENT_ROLE
@@ -81,6 +81,7 @@ class ClientPutOperation(OperationBase):
             db_header = DataBlockHeader(keys[0], replica_count, checksum, user_id_hash)
             tmp_db.write(db_header.pack(), seek=0)
             tmp_db.close()
+            size = os.path.getsize(tmp_db_path) - DataBlockHeader.HEADER_LEN
 
             for i, key in enumerate(keys):
                 cur_dbct = FSMappedDHTRange.DBCT_MASTER if i == 0 else FSMappedDHTRange.DBCT_REPLICA
@@ -131,13 +132,24 @@ class ClientPutOperation(OperationBase):
             if wait_writes_count > succ_count:
                 raise Exception('\n'.join(errors))
 
-            #FIXME: update user metadata
-            return FabnetPacketResponse(ret_parameters={'key': keys[0], 'checksum': checksum})
+            return FabnetPacketResponse(ret_parameters={'key': keys[0], 'checksum': checksum, 'size': size})
         except Exception, err:
             if init_block:
-                #FIXME: remove all saved blocks
-                pass
+                try:
+                    delete_data = self.get_operation_object('ClientDeleteData')
+                    d_packet = FabnetPacketRequest(method='ClientDeleteData', \
+                            parameters={'key': master_key, 'replica_count': replica_count, \
+                                        'user_id_hash': user_id_hash})
+                    d_packet.role = NODE_ROLE
+                    ret = delete_data.process(d_packet)
+
+                    if ret.ret_code != RC_OK:
+                        raise Exception(ret.ret_message)
+                except Exception, e:
+                    err = str(err)
+                    err += '\nDelete saved DBs error: %s'%e
             else:
+
                 #FIXME: restore data blocks
                 pass
 

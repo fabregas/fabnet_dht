@@ -1,5 +1,6 @@
 import unittest
 from test_utils import *
+from M2Crypto import RSA, X509, EVP
 
 class TestDHTInitProcedure(unittest.TestCase):
     NODES = [(1986, '/tmp/dht_1986_home', NODE1_KS), (1987, '/tmp/dht_1987_home', NODE2_KS)]
@@ -43,12 +44,13 @@ class TestDHTInitProcedure(unittest.TestCase):
             self.UMetadata_test(servers)
             self.PutDataBlock_test(servers)
             self.PutGet_test(servers)
+            self.Objects_test(servers)
         finally:
             for server in servers:
                 server.stop()
 
     def UMetadata_test(self, servers, need_restore_test=True):
-        add_list = [('/test.out', [('%040x'%23124, 2, 22223), ('%040x'%542322, 2, 3333)])]
+        add_list = [('/test.out', [('%040x'%23124, 2, 0, 22223), ('%040x'%542322, 2, 22223, 3333)])]
         KEY = MAX_KEY - 333
         ret = servers[1].update_md('%040x'%KEY, add_list, rm_list=[])
         self.assertEqual(ret.ret_code, RC_MD_NOTINIT, ret.ret_message)
@@ -65,7 +67,7 @@ class TestDHTInitProcedure(unittest.TestCase):
             os.system('rm -rf %s'%path)
             time.sleep(0.5)
 
-        add_list = [('/test2.out', [('%040x'%5426662, 3, 133)])]
+        add_list = [('/test2.out', [('%040x'%5426662, 3, 0, 133)])]
         ret = servers[1].update_md('%040x'%KEY, add_list, rm_list=[])
         self.assertEqual(ret.ret_code, 0, ret.ret_message)
         
@@ -184,6 +186,71 @@ class TestDHTInitProcedure(unittest.TestCase):
         ret = server.check_data_block(key, dbct)
         self.assertEqual(ret.ret_code, RC_INVALID_DATA, ret.ret_message)
 
+    def _get_cl_cn(self, ks):
+        cert = X509.load_cert_string(ks.cert())
+        return hashlib.sha1(cert.get_subject().CN).hexdigest()
+
+    def Objects_test(self, servers):
+        data = 'sdfw34pofi20jpifj3049f23fdjvnoi4fhruwefwwfw'*100
+        data2 = '342234242pifj3049f23fdjvnoi4fhruwefwwfw'*80
+        data3 = 'gsdgsdsdfai4fhru'*120
+        client_ks = init_keystore(USER1_KS, USER_PWD)
+        client2_ks = init_keystore(USER2_KS, USER_PWD)
+
+        keys_info = servers[1].get_keys_info(None)
+        mkey = keys_info[0][0]
+        ret = servers[1].put_object_part('/test_file.out', data, seek=0, wait_writes=3, key=mkey, client_ks=client_ks)
+        self.assertNotEqual(ret.ret_code, 0, ret.ret_message)
+        server = servers[0] if keys_info[0][2].endswith('86') else servers[1]
+        ret = server.get_data_block(mkey, FSMappedDHTRange.DBCT_MASTER, client_ks)
+        self.assertNotEqual(ret.ret_code, 0, ret.ret_message)
+
+        
+        ret = servers[1].update_user_md(self._get_cl_cn(client_ks), 100500)
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+        ret = servers[0].update_user_md(self._get_cl_cn(client2_ks), 1005000)
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+
+        ret = servers[1].put_object_part('/test_file.out', data, seek=0, wait_writes=3, init_block=True, client_ks=client_ks)
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+        master_key = ret.ret_parameters['key']
+        size = ret.ret_parameters['size']
+        keys_info = servers[1].get_keys_info(master_key, 2)
+        server = servers[0] if keys_info[0][2].endswith('86') else servers[1]
+        ret = server.get_data_block(master_key, FSMappedDHTRange.DBCT_MASTER, client_ks)
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+
+        ret = servers[0].put_object_part('/test_file.out', data2, wait_writes=2, init_block=False, client_ks=client2_ks, replica_count=4)
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+
+        ret = servers[1].put_object_part('/test_file.out', data3, seek=size, wait_writes=2, init_block=True, client_ks=client_ks)
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+
+        ret = servers[0].get_object_info('/tttt', client2_ks)
+        self.assertEqual(ret.ret_code, RC_ERROR, ret.ret_message)
+
+        ret = servers[0].get_object_info('/test_file.out', client2_ks)
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
+        self.assertEqual(ret.ret_parameters['user_info']['used_size'], len(data2)*5)
+        self.assertEqual(ret.ret_parameters['user_info']['storage_size'], 1005000)
+        self.assertEqual(ret.ret_parameters['data_blocks'][0]['seek'], 0)
+        self.assertEqual(ret.ret_parameters['data_blocks'][0]['replica_count'], 4)
+        self.assertEqual(ret.ret_parameters['data_blocks'][0]['size'], len(data2))
+        self.assertEqual(ret.ret_parameters['path_info']['type'], 'file')
+        self.assertEqual(ret.ret_parameters['path_info']['name'], '/test_file.out')
+
+        ret = servers[0].get_object_info('/test_file.out', client_ks)
+        self.assertEqual(ret.ret_parameters['user_info']['used_size'], len(data)*3 + len(data3)*3)
+        self.assertEqual(ret.ret_parameters['user_info']['storage_size'], 100500)
+        self.assertEqual(ret.ret_parameters['data_blocks'][0]['db_key'], master_key)
+        self.assertEqual(ret.ret_parameters['data_blocks'][0]['seek'], 0)
+        self.assertEqual(ret.ret_parameters['data_blocks'][0]['size'], len(data))
+        self.assertEqual(ret.ret_parameters['data_blocks'][1]['seek'], size)
+        self.assertEqual(ret.ret_parameters['data_blocks'][1]['size'], len(data3))
+        self.assertEqual(ret.ret_parameters['path_info']['type'], 'file')
+        self.assertEqual(ret.ret_parameters['path_info']['name'], '/test_file.out')
+
+        self.assertEqual(ret.ret_code, 0, ret.ret_message)
 
     def test02_dht_restore_after_network_fail(self):
         servers = []
