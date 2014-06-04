@@ -745,6 +745,9 @@ class MonitorDHTRanges(threading.Thread):
             if self.stopped.is_set():
                 break
 
+            if self.operator.status == DS_INITIALIZE:
+                continue
+
             try:
                 logger.debug('MonitorDHTRanges iteration...')
                 self._process_foreign()

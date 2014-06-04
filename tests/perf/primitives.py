@@ -42,7 +42,7 @@ def put_data(nodes_list, keys_queue, errors_queue, data_block_size, count=1, ret
             nimbus = Nimbus(KEY_STORAGE, node_addr)
 
             t0 = datetime.now()
-            primary_key = nimbus.put_data_block(data_block, replica_count=2, wait_writes_count=3)
+            primary_key = nimbus.put_data_block(data_block, replica_count=2, wait_writes=3)
             dt += (datetime.now() - t0)
 
             keys_queue.put(primary_key)

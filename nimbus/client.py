@@ -25,8 +25,12 @@ class NimbusError(Exception):
 
 class Nimbus:
     def __init__(self, key_storage, endpoint):
-        cert = X509.load_cert_string(key_storage.cert())
-        self.__user_id_hash = hashlib.sha1(cert.get_subject().CN).hexdigest()
+        if key_storage:
+            cert = X509.load_cert_string(key_storage.cert())
+            user_id = cert.get_subject().CN
+        else:
+            user_id = 'None'
+        self.__user_id_hash = hashlib.sha1(user_id).hexdigest()
         self.__client = FriClient(key_storage)
         self.__endpoint = endpoint
 
@@ -37,7 +41,9 @@ class Nimbus:
         ret_packet = self.__client.call_sync(self.__endpoint, packet)
         if ret_packet.ret_code != RC_OK:
             raise NimbusError('GetKeysInfo error: %s'%ret_packet.ret_message)
-        keys_info = ret_packet.ret_parameters['keys_info']
+        keys_info = ret_packet.ret_parameters.get('keys_info', None)
+        if not keys_info:
+            raise Exception('GetKeysInfo error: %s [%s]'%(ret_packet.ret_message, ret_packet.ret_parameters))
 
         return keys_info
 

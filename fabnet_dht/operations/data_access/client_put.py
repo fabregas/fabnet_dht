@@ -138,7 +138,7 @@ class ClientPutOperation(OperationBase):
                 try:
                     delete_data = self.get_operation_object('ClientDeleteData')
                     d_packet = FabnetPacketRequest(method='ClientDeleteData', \
-                            parameters={'key': master_key, 'replica_count': replica_count, \
+                            parameters={'key': keys[0], 'replica_count': replica_count, \
                                         'user_id_hash': user_id_hash})
                     d_packet.role = NODE_ROLE
                     ret = delete_data.process(d_packet)
