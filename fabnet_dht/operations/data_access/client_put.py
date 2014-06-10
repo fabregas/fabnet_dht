@@ -12,6 +12,7 @@ Copyright (C) 2012 Konstantin Andrusenko
 import os
 import hashlib
 import shutil
+import uuid
 from fabnet.core.operation_base import  OperationBase
 from fabnet.core.fri_base import FabnetPacketResponse, BinaryDataPointer, FabnetPacketRequest
 from fabnet.core.constants import RC_OK, RC_ERROR
@@ -60,27 +61,26 @@ class ClientPutOperation(OperationBase):
         errors = []
         local_save = []
         tmp_db = None
+        master_db = None
+        keys = KeyUtils.generate_new_keys(self.node_name, replica_count, prime_key=key)
         try:
-            keys = KeyUtils.generate_new_keys(self.node_name, replica_count, prime_key=key)
-
             user_id_hash = hashlib.sha1(str(packet.user_id)).hexdigest()
 
-            master_db_path = self.operator.get_db_path(keys[0], FSMappedDHTRange.DBCT_MASTER)
-            #with ThreadSafeDataBlock(db_path) as db:
-            with DataBlock(master_db_path) as db:
-                if db.exists():
-                    if init_block:
-                        return FabnetPacketResponse(ret_code=RC_ALREADY_EXISTS, ret_message='Already exists!')
-                    db.get_header().match(user_id_hash=user_id_hash)
-
-
-            tmp_db_path = self.operator.get_db_path(keys[0]+'.tmp', FSMappedDHTRange.DBCT_TEMP)
+            tmp_db_path = self.operator.get_db_path(keys[0]+str(uuid.uuid4()), FSMappedDHTRange.DBCT_TEMP)
             tmp_db = DataBlock(tmp_db_path)
+
+            master_db_path = self.operator.get_db_path(keys[0], FSMappedDHTRange.DBCT_MASTER)
+            master_db = DataBlock(master_db_path)
+            if master_db.exists():
+                if init_block:
+                    return FabnetPacketResponse(ret_code=RC_ALREADY_EXISTS, ret_message='[1] Already exists!')
+                master_db.get_header().match(user_id_hash=user_id_hash)
+            master_db.block()
+
             tmp_db.write(DataBlockHeader.EMPTY_HEADER)
             checksum = tmp_db.write(packet.binary_data, iterate=True)
             db_header = DataBlockHeader(keys[0], replica_count, checksum, user_id_hash)
             tmp_db.write(db_header.pack(), seek=0)
-            tmp_db.close()
             size = os.path.getsize(tmp_db_path) - DataBlockHeader.HEADER_LEN
 
             for i, key in enumerate(keys):
@@ -103,7 +103,10 @@ class ClientPutOperation(OperationBase):
                 else:
                     resp = self._init_operation(node_address, 'PutDataBlock', params, \
                                                 sync=True, binary_data=tmp_db.chunks())
-                    if resp.ret_code != RC_OK:
+
+                    if resp.ret_code == RC_ALREADY_EXISTS:
+                        return FabnetPacketResponse(ret_code=RC_ALREADY_EXISTS, ret_message='[2] Already exists!')
+                    elif resp.ret_code != RC_OK:
                         errors.append('From %s: %s'%(node_address, resp.ret_message))
                     else:
                         succ_count += 1
@@ -153,10 +156,13 @@ class ClientPutOperation(OperationBase):
                 #FIXME: restore data blocks
                 pass
 
-            return FabnetPacketResponse(ret_code=RC_ERROR, ret_message='Write error: %s'%err)
+            return FabnetPacketResponse(ret_code=RC_ERROR, ret_message='Write error [key=%s]: %s'%(keys[0], err))
         finally:
             if tmp_db:
+                tmp_db.close()
                 tmp_db.remove()
+            if master_db:
+                master_db.close()
 
 
 

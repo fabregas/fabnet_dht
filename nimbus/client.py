@@ -16,7 +16,7 @@ from M2Crypto import X509
 from fabnet.core.fri_base import FabnetPacketRequest, FabnetPacketResponse
 from fabnet.core.fri_client import FriClient
 from fabnet.core.constants import RC_OK, RC_ERROR
-from fabnet_dht.constants import RC_NO_DATA, MIN_REPLICA_COUNT 
+from fabnet_dht.constants import RC_NO_DATA, MIN_REPLICA_COUNT, RC_ALREADY_EXISTS 
 
 
 class NimbusError(Exception):
@@ -47,9 +47,9 @@ class Nimbus:
 
         return keys_info
 
-    def put_data_block(self, data_block, key=None, replica_count=MIN_REPLICA_COUNT, \
+    def put_data_block(self, data_block, u_key=None, replica_count=MIN_REPLICA_COUNT, \
                                     init_block=True, wait_writes=MIN_REPLICA_COUNT+1):
-        keys_info = self.__get_keys_info(key, replica_count)
+        keys_info = self.__get_keys_info(u_key, replica_count)
         key, _, nodeaddr = keys_info[0]
 
         params = {'wait_writes_count': wait_writes, 'replica_count': replica_count, \
@@ -57,6 +57,10 @@ class Nimbus:
         packet_obj = FabnetPacketRequest(method='ClientPutData', parameters=params, binary_data=data_block)
 
         ret_packet = self.__client.call_sync(nodeaddr, packet_obj)
+
+        if (ret_packet.ret_code == RC_ALREADY_EXISTS) and (u_key is None):
+            return self.put_data_block(data_block, u_key, replica_count, init_block, wait_writes)
+
         if ret_packet.ret_code != RC_OK:
             raise NimbusError('ClientPutData error: %s'%ret_packet.ret_message)
         return ret_packet.ret_parameters['key']

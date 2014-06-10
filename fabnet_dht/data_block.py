@@ -170,6 +170,7 @@ class DataBlock:
 
     def __open(self, lock_flag=fcntl.LOCK_SH):
         self.__fd = os.open(self.__path, os.O_RDWR | os.O_CREAT)
+
         fcntl.lockf(self.__fd, lock_flag)
         if self.NEED_THRD_LOCK:
             self.__thread_lock(self.__path, shared=True)
@@ -266,13 +267,14 @@ class DataBlock:
         '''open data block file (if not opened), lock file with exclusive lock
         and keep file opened'''
         if not self.__fd:
-            self.__open()
+            self.__open(fcntl.LOCK_EX)
 
         if self.__blocked:
             return False
         if self.NEED_THRD_LOCK:
             self.__thread_lock(self.__path, shared=False)
         fcntl.lockf(self.__fd, fcntl.LOCK_EX)
+        self.__blocked = True
         return True
 
     def unblock(self):
