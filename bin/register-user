@@ -1,0 +1,62 @@
+#!/usr/bin/python
+import os
+import tempfile
+import sys
+import getpass
+import random
+from string import digits, ascii_uppercase
+from optparse import OptionParser
+
+from fabnet_ca.ca_ks_generator import create_ca_ks
+from fabnet.core.key_storage import KeyStorage
+
+from dht_crm.core import DHTCRM
+
+if __name__ == '__main__':
+    parser = OptionParser()
+    parser.add_option("--ca-uri", dest="ca_uri",
+            help="URI of CA service (https://127.0.0.1:8080 by default)")
+    parser.add_option("-k", "--crm-ks", dest="ks_path",
+                    help="path to CRM key storage")
+    parser.add_option("-u", "--user-name", dest="user_name",
+                    help="user identificator")
+    parser.add_option("-o", "--out-path", dest="out_path",
+                    help="path to output user's key storage")
+
+    (options, args) = parser.parse_args()
+
+    if (not options.out_path) or (not options.user_name) or (not options.ks_path):
+        parser.print_help()
+        sys.exit(1)
+
+    if not options.ca_uri:
+        options.ca_uri = 'https://127.0.0.1:8080'
+
+    try:
+        if os.path.exists(options.out_path):
+            raise Exception('Output path %s is already exists!'%options.out_path)
+
+        open(options.out_path, 'w').close()
+        os.remove(options.out_path)
+
+        pwd = getpass.getpass('Enter CRM key storage password: ')
+        ks = KeyStorage(options.ks_path, pwd)
+
+        out_password =  getpass.getpass('Enter password for user key storage: ')
+        re_password =  getpass.getpass('Enter again password for user key storage: ')
+        if out_password != re_password:
+            raise Exception('Passwords are not equal!')
+
+        dht_crm = DHTCRM(ks, options.ca_uri) 
+        act_key = dht_crm.register_user(100, 1024*1024)
+        pri, req = dht_crm.gen_cert_req(options.user_name)
+        cert = dht_crm.activate(act_key, req)
+
+        out_ks = KeyStorage(options.out_path, out_password) 
+        out_ks.create(pri)
+        out_ks.append_cert(cert)
+        print 'done.'
+    except Exception, err:
+        print 'ERROR! %s'%err
+        sys.exit(1)
+

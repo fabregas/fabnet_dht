@@ -122,6 +122,8 @@ class CheckHashRangeTableOperation(OperationBase):
             self.operator.check_near_range()
 
         elif packet.ret_code == RC_OK:
+            if self.operator.get_status() == DS_PREINIT:
+                 self.operator.set_status_to_normalwork()
             self.operator.check_near_range()
 
         elif packet.ret_code == RC_ERROR:

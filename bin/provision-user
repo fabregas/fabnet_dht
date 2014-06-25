@@ -1,0 +1,47 @@
+#!/usr/bin/python
+import os
+import tempfile
+import sys
+import getpass
+import random
+from string import digits, ascii_uppercase
+from optparse import OptionParser
+
+from fabnet.core.key_storage import KeyStorage
+
+from dht_crm.core import DHTCRM
+
+if __name__ == '__main__':
+    parser = OptionParser()
+    parser.add_option("--dht-uri", dest="dht_uri",
+            help="URI of DHT service endpoint")
+    parser.add_option("--ca-uri", dest="ca_uri",
+            help="URI of CA service (https://127.0.0.1:8080 by default)")
+    parser.add_option("-k", "--crm-ks", dest="ks_path",
+                    help="path to CRM key storage")
+    parser.add_option("-u", "--user-name", dest="user_name",
+                    help="user identificator")
+
+    (options, args) = parser.parse_args()
+
+    if (not options.dht_uri) or (not options.ks_path) or (not options.user_name):
+        parser.print_help()
+        sys.exit(1)
+
+    if not options.ca_uri:
+        options.ca_uri = 'https://127.0.0.1:8080'
+
+    try:
+        if not os.path.exists(options.ks_path):
+            raise Exception('CRM key storage path %s is not found!'%options.ks_path)
+
+        pwd = getpass.getpass('Enter CRM key storage password: ')
+        ks = KeyStorage(options.ks_path, pwd)
+
+        dht_crm = DHTCRM(ks, options.ca_uri) 
+        dht_crm.activate_on_dht(options.user_name, options.dht_uri)
+        print 'done.'
+    except Exception, err:
+        print 'ERROR! %s'%err
+        sys.exit(1)
+

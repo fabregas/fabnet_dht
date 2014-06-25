@@ -12,12 +12,13 @@ from fabnet.utils.logger import logger
 from nimbus.client import Nimbus
 from fabnet.core.fri_base import FabnetPacketRequest
 from fabnet.core.fri_client import FriClient
+from fabnet.core.key_storage import init_keystore
 #logger.setLevel(logging.DEBUG)
 
 from Crypto import Random
 Random.atfork()
 
-KEY_STORAGE = None
+KEY_STORAGE = init_keystore('tests/ks/user_ks.p12', 'qwerty')
 NIMBUS = None
 
 def to_dt(dt_str):
@@ -77,7 +78,7 @@ def get_data(nodes_list, keys_queue, errors_queue, ret_queue=None):
 
 def collect_topology(node_ip):
     print 'Collecting topology on %s'%node_ip
-    fri_client = FriClient()
+    fri_client = FriClient(KEY_STORAGE)
     packet_obj = FabnetPacketRequest(method='TopologyCognition')
     ret_code, ret_msg = fri_client.call(node_ip, packet_obj)
 
@@ -88,7 +89,7 @@ def collect_topology(node_ip):
 
 def collect_nodes_stat(nodes_list, reset=False):
     collected_stat = {}
-    fri_client = FriClient()
+    fri_client = FriClient(KEY_STORAGE)
     for node_ip in nodes_list:
         #print 'Collecting statistic from %s'%node_ip
         packet_obj = FabnetPacketRequest(method='NodeStatistic', sync=True, parameters={'reset_op_stat': reset})
